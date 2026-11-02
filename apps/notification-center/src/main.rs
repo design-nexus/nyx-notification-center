@@ -3,13 +3,15 @@
 //! `nyx-notification-center` starts it (hidden; normally as a user service).
 //! `nyx-notification-center --toggle | --show | --hide` opens or closes the running one;
 //! `--toggle pinned | history` opens it on that view. `--only <output>` keeps it on one
-//! output (for trying it on a test output).
+//! output (for trying it on a test output). `--use-nyx-popups` / `--use-omarchy-popups`
+//! choose who receives notifications (see `switch`).
 
 mod card;
 mod choice;
 mod client;
 mod panel;
 mod popups;
+mod switch;
 mod theme;
 mod ui;
 
@@ -21,6 +23,12 @@ use std::rc::Rc;
 pub const APP_ID: &str = "io.github.design_nexus.nyx.NotificationCenter";
 
 fn main() -> std::process::ExitCode {
+    match std::env::args().nth(1).as_deref() {
+        Some("--use-nyx-popups") => return switch::use_nyx(),
+        Some("--use-omarchy-popups") => return switch::use_omarchy(),
+        Some("--popups") => return switch::status(),
+        _ => {}
+    }
     // A test copy (`--only <output>`) is separate: its own id, never the running panel.
     let test = std::env::args().any(|a| a == "--only");
     let (id, mut flags) = if test {
@@ -41,9 +49,12 @@ fn main() -> std::process::ExitCode {
         let args: Vec<String> = cmd.arguments().iter().skip(1).map(|a| a.to_string_lossy().to_string()).collect();
         if args.iter().any(|a| a == "-h" || a == "--help") {
             println!(
-                "Usage: nyx-notification-center [--toggle [inbox|pinned|history] | --show | --hide] [--only <output>]\n\n\
+                "Usage: nyx-notification-center [--toggle [inbox|pinned|history] | --show | --hide] [--only <output>]\n\
+                        nyx-notification-center --use-nyx-popups | --use-omarchy-popups | --popups\n\n\
                  With no option, start (hidden). The options open or close the running one;\n\
-                 --toggle with a view's name opens it on that view."
+                 --toggle with a view's name opens it on that view. --use-nyx-popups has Nyx\n\
+                 receive notifications and show the pop-ups; --use-omarchy-popups gives that back\n\
+                 to Omarchy; --popups says which is in use."
             );
             return glib::ExitCode::SUCCESS;
         }

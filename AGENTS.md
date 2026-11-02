@@ -4,11 +4,18 @@ Applications: apps/notifyd (the history service; no GTK) and apps/notification-c
 (GTK, layer-shell panel). The store is crates/nyx-notify-store (SQLite schema, Omarchy
 import, retention, pins, search; no GTK), with the unit tests.
 
-Stage A (now): Omarchy's shell owns `org.freedesktop.Notifications` and shows the
-pop-ups; nyx-notifyd only reads `~/.local/state/omarchy/notifications/{live,history,quiet}.json`
-and never writes there. Do not disturb is changed only through Omarchy's own commands.
-Stage B (replacing the daemon) waits for a compatibility suite; see
-nyx/docs/desktop/ARCHITECTURE.md §4.4.
+Two modes (`nyx-notifyd --mode`; switched with `nyx-notification-center
+--use-nyx-popups | --use-omarchy-popups`, apps/notification-center/src/switch.rs):
+- Omarchy (stage A, default): Omarchy's shell owns `org.freedesktop.Notifications`;
+  nyx-notifyd only reads `~/.local/state/omarchy/notifications/{live,history}.json`.
+- Nyx (stage B): nyx-notifyd serves `org.freedesktop.Notifications` (apps/notifyd/src/fdo.rs),
+  the panel process draws the pop-ups (popups.rs) from its `Popup`/`PopupClosed` signals,
+  Omarchy's `omarchy.notifications` is in `disabledPlugins`, and the bridge plugin
+  (shell-plugin/, id `design-nexus.notifications`) answers Omarchy's `notifications` IPC.
+Do not disturb is `quiet.json` in both (written by nyx-notifyd in Nyx mode, keeping
+Omarchy's other fields). Clicks and buttons always go through nyx-notifyd (`Activate`,
+`InvokeAction`, `RunAction`). `cargo test -p nyx-notifyd --test compat` is the
+compatibility suite (private dbus-daemon, real notify-send and omarchy-notification-send).
 
 Rules: read, dismissed and pinned are separate flags; nothing but an explicit delete
 removes a pinned row. A deleted row leaves a marker in `gone` so the next import doesn't

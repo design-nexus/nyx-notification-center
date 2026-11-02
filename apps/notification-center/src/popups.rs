@@ -88,11 +88,10 @@ impl Popups {
                 p.expire(id);
             }
         });
-        if let Some(t) = self.toasts.borrow_mut().get_mut(&id) {
-            if let Some(old) = t.timer.replace(timer) {
+        if let Some(t) = self.toasts.borrow_mut().get_mut(&id)
+            && let Some(old) = t.timer.replace(timer) {
                 old.remove();
             }
-        }
     }
 
     fn show(self: &Rc<Self>, payload: &str, panel_open: bool) {

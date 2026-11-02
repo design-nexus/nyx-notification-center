@@ -15,6 +15,14 @@ fn json<T: serde::Serialize>(v: &T) -> fdo::Result<String> {
     serde_json::to_string(v).map_err(err)
 }
 
+impl Service {
+    /// The newest pop-up's row id, if one is up.
+    fn newest_id(&self) -> fdo::Result<Option<i64>> {
+        let open = self.state.with(|s| s.open_notes())?;
+        Ok(open.into_iter().filter(|n| n.live).max_by(|a, b| a.ts.total_cmp(&b.ts)).map(|n| n.id))
+    }
+}
+
 #[interface(name = "io.github.design_nexus.nyx.Notifications1")]
 impl Service {
     /// "nyx" when this service receives notifications itself (stage B), else "omarchy".
@@ -170,6 +178,35 @@ impl Service {
         match open.into_iter().filter(|n| n.live).max_by(|a, b| a.ts.total_cmp(&b.ts)) {
             Some(n) => json(&n),
             None => Ok(String::new()),
+        }
+    }
+
+    /// Super + comma: act on the newest pop-up (as a click would).
+    async fn act_newest(&self) -> fdo::Result<bool> {
+        match self.newest_id()? {
+            Some(id) => state::activate(&self.state, id).await,
+            None => Ok(false),
+        }
+    }
+
+    /// Dismiss the newest pop-up.
+    async fn dismiss_newest(&self) -> fdo::Result<bool> {
+        match self.newest_id()? {
+            Some(id) => self.dismiss(vec![id]).await,
+            None => Ok(false),
+        }
+    }
+
+    /// The newest pop-up's `n`th button (from 1): the app's own, then Omarchy's.
+    async fn action_newest(&self, n: u32) -> fdo::Result<bool> {
+        let Some(id) = self.newest_id()? else { return Ok(false) };
+        let Some(note) = self.state.with(|s| s.get(id))? else { return Ok(false) };
+        let own: Vec<String> = note.app_actions.iter().filter(|a| a.key != "default").map(|a| a.key.clone()).collect();
+        let i = n.saturating_sub(1) as usize;
+        if let Some(key) = own.get(i) {
+            state::invoke_action(&self.state, id, key).await
+        } else {
+            state::run_action(&self.state, id, (i - own.len()) as u32).await
         }
     }
 

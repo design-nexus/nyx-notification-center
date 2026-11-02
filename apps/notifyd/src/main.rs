@@ -152,6 +152,10 @@ fn main() -> std::process::ExitCode {
             }
         };
     }
+    if !args.is_empty() {
+        eprintln!("Usage: nyx-notifyd [--mode | --set-mode nyx|omarchy]");
+        return std::process::ExitCode::FAILURE;
+    }
     let nyx_mode = match std::env::var("NYX_NOTIFYD_MODE").ok().as_deref() {
         Some("nyx") => true,
         Some("omarchy") => false,
@@ -174,7 +178,6 @@ fn main() -> std::process::ExitCode {
         conn: OnceLock::new(),
     });
     let built = zbus::blocking::connection::Builder::session()
-        .and_then(|b| b.name(BUS))
         .and_then(|b| b.serve_at(state::PATH, service::Service { state: st.clone() }))
         .and_then(|b| if nyx_mode { b.serve_at(fdo::PATH, fdo::Notifications { state: st.clone() }) } else { Ok(b) })
         .and_then(|b| b.build());
@@ -185,6 +188,18 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+    // One at a time: a second copy leaves the running one alone.
+    match conn.request_name_with_flags(BUS, zbus::fdo::RequestNameFlags::DoNotQueue.into()) {
+        Ok(zbus::fdo::RequestNameReply::PrimaryOwner) => {}
+        Ok(_) => {
+            eprintln!("nyx-notifyd: already running");
+            return std::process::ExitCode::FAILURE;
+        }
+        Err(e) => {
+            eprintln!("nyx-notifyd: {BUS}: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    }
     let _ = st.conn.set(conn.inner().clone());
     if nyx_mode {
         // Queued if Omarchy's shell still has it; ours as soon as it lets go.

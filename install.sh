@@ -61,13 +61,17 @@ install -m 644 "$data/nyx-notification-center.service" "$data/nyx-notifyd.servic
 install -m 644 "$data/io.github.design_nexus.nyx.Notifications.service" "$dbus/"
 systemctl --user daemon-reload 2>/dev/null || true
 
-# The bar button, for omarchy-shell. It's put in place, not added to the bar: turn it on
-# from Settings → Plugins (or `omarchy-plugin-enable design-nexus.notification-center right`).
+# For omarchy-shell: the bar button (put in place, not added to the bar: turn it on from
+# Settings → Plugins, or `omarchy-plugin-enable design-nexus.notification-center right`),
+# and the bridge that keeps Omarchy's notification shortcuts working once Nyx receives
+# notifications (turned on only by `nyx-notification-center --use-nyx-popups`).
 plugins="$config/omarchy/plugins"
 if [[ -d $plugins ]]; then
-  mkdir -p "$plugins/design-nexus.notification-center"
+  mkdir -p "$plugins/design-nexus.notification-center" "$plugins/design-nexus.notifications"
   install -m 644 "$src/apps/notification-center/plugin/manifest.json" "$src/apps/notification-center/plugin/BarWidget.qml" \
     "$plugins/design-nexus.notification-center/"
+  install -m 644 "$src/apps/notification-center/shell-plugin/manifest.json" "$src/apps/notification-center/shell-plugin/Service.qml" \
+    "$plugins/design-nexus.notifications/"
   omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
 fi
 
