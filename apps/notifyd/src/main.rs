@@ -1,162 +1,38 @@
 //! nyx-notifyd: keeps every notification in Nyx's history.
 //!
-//! Stage A: Omarchy's shell still receives notifications and shows the pop-ups. This
-//! service watches its notification files and copies each notification into the store,
-//! then serves the store on the session bus as `io.github.design_nexus.nyx.Notifications1`
-//! (JSON in and out, a `Changed` signal after every change). It also runs the Do not
-//! disturb schedule, switching Omarchy's own setting at the start and end of the quiet
-//! hours, and drops history past its retention period once an hour.
+//! - **Omarchy mode** (stage A): Omarchy's shell receives notifications and shows the
+//!   pop-ups. This service watches its notification files and copies each one into the
+//!   store.
+//! - **Nyx mode** (stage B): this service is `org.freedesktop.Notifications`. It stores
+//!   each notification as it arrives and asks the Notification Center to show the pop-up.
+//!
+//! Either way it serves the store as `io.github.design_nexus.nyx.Notifications1` (JSON
+//! in and out, a `Changed` signal), runs the Do not disturb schedule and drops history
+//! past its retention period once an hour.
+//!
+//! `nyx-notifyd --mode` prints the mode; `--set-mode nyx|omarchy` changes it for the
+//! next start (switching is done by `nyx-notification-center --use-nyx-popups` /
+//! `--use-omarchy-popups`, which also hands Omarchy's part over).
 
-use nyx_notify_store::{Query, Settings, Store, now, omarchy};
-use std::path::{Path, PathBuf};
+mod fdo;
+mod image;
+mod launch;
+mod quiet;
+mod service;
+mod state;
+
+use nyx_notify_store::{Store, now, omarchy};
+use state::State;
+use std::path::Path;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use zbus::object_server::SignalEmitter;
-use zbus::{fdo, interface};
 
 const BUS: &str = "io.github.design_nexus.nyx.Notifications";
-const PATH: &str = "/io/github/design_nexus/nyx/Notifications";
 
-type Shared = Arc<Mutex<Store>>;
-
-struct Service {
-    store: Shared,
-    /// Wakes the schedule when the settings change.
-    settings_changed: mpsc::Sender<()>,
-}
-
-fn err(e: impl std::fmt::Display) -> fdo::Error {
-    fdo::Error::Failed(e.to_string())
-}
-
-fn json<T: serde::Serialize>(v: &T) -> fdo::Result<String> {
-    serde_json::to_string(v).map_err(err)
-}
-
-impl Service {
-    fn with<T>(&self, f: impl FnOnce(&mut Store) -> nyx_notify_store::Result<T>) -> fdo::Result<T> {
-        let mut s = self.store.lock().map_err(err)?;
-        f(&mut s).map_err(err)
-    }
-
-    async fn changed_if(&self, changed: bool, e: &SignalEmitter<'_>) -> fdo::Result<bool> {
-        if changed {
-            if let Ok(s) = self.store.lock() {
-                publish(&s);
-            }
-            let _ = Self::changed(e).await;
-        }
-        Ok(changed)
-    }
-}
-
-#[interface(name = "io.github.design_nexus.nyx.Notifications1")]
-impl Service {
-    /// Not dismissed, newest first (JSON list).
-    fn inbox(&self) -> fdo::Result<String> {
-        json(&self.with(|s| s.inbox())?)
-    }
-
-    /// Pinned, most recently pinned first.
-    fn pinned(&self) -> fdo::Result<String> {
-        json(&self.with(|s| s.pinned())?)
-    }
-
-    /// History matching `query` (JSON `{text, app, days, limit}`; `""` for everything).
-    fn history(&self, query: &str) -> fdo::Result<String> {
-        let q: Query = if query.trim().is_empty() { Query::default() } else { serde_json::from_str(query).map_err(err)? };
-        json(&self.with(|s| s.history(&q, now()))?)
-    }
-
-    /// Apps with stored notifications, and the ones left out of history.
-    fn apps(&self) -> fdo::Result<String> {
-        json(&self.with(|s| s.apps())?)
-    }
-
-    fn settings(&self) -> fdo::Result<String> {
-        json(&self.with(|s| Ok(s.settings()))?)
-    }
-
-    /// Save settings (JSON); returns them as stored.
-    async fn set_settings(&self, settings: &str, #[zbus(signal_emitter)] e: SignalEmitter<'_>) -> fdo::Result<String> {
-        let parsed: Settings = serde_json::from_str(settings).map_err(err)?;
-        let saved = self.with(|s| s.set_settings(parsed))?;
-        if let Ok(s) = self.store.lock() {
-            publish(&s);
-        }
-        let _ = self.settings_changed.send(());
-        let _ = Self::changed(&e).await;
-        json(&saved)
-    }
-
-    async fn set_pinned(&self, id: i64, pinned: bool, #[zbus(signal_emitter)] e: SignalEmitter<'_>) -> fdo::Result<bool> {
-        let c = self.with(|s| s.set_pinned(id, pinned))?;
-        self.changed_if(c, &e).await
-    }
-
-    async fn dismiss(&self, ids: Vec<i64>, #[zbus(signal_emitter)] e: SignalEmitter<'_>) -> fdo::Result<bool> {
-        let c = self.with(|s| s.dismiss(&ids))?;
-        self.changed_if(c, &e).await
-    }
-
-    /// Clear the Inbox. Pinned notifications stay pinned.
-    async fn dismiss_all(&self, #[zbus(signal_emitter)] e: SignalEmitter<'_>) -> fdo::Result<bool> {
-        let c = self.with(|s| s.dismiss_all())?;
-        self.changed_if(c, &e).await
-    }
-
-    async fn mark_read(&self, ids: Vec<i64>, #[zbus(signal_emitter)] e: SignalEmitter<'_>) -> fdo::Result<bool> {
-        let c = self.with(|s| s.mark_read(&ids))?;
-        self.changed_if(c, &e).await
-    }
-
-    async fn mark_all_read(&self, #[zbus(signal_emitter)] e: SignalEmitter<'_>) -> fdo::Result<bool> {
-        let c = self.with(|s| s.mark_all_read())?;
-        self.changed_if(c, &e).await
-    }
-
-    /// Delete for good, pinned or not.
-    async fn delete(&self, ids: Vec<i64>, #[zbus(signal_emitter)] e: SignalEmitter<'_>) -> fdo::Result<bool> {
-        let c = self.with(|s| s.delete(&ids))?;
-        self.changed_if(c, &e).await
-    }
-
-    /// Delete all history except pinned notifications.
-    async fn delete_history(&self, #[zbus(signal_emitter)] e: SignalEmitter<'_>) -> fdo::Result<bool> {
-        let c = self.with(|s| s.delete_history())?;
-        self.changed_if(c, &e).await
-    }
-
-    /// Something changed: read again.
-    #[zbus(signal)]
-    async fn changed(e: &SignalEmitter<'_>) -> zbus::Result<()>;
-}
-
-/// What the bar button shows, in a small file it watches: `{"unread": n, "inbox": n}`
-/// in `$XDG_STATE_HOME/nyx/notifications.json`.
-fn publish(store: &Store) {
-    let Ok(inbox) = store.inbox() else { return };
-    let unread = inbox.iter().filter(|n| !n.read).count();
-    let state = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state"))
-        .join("nyx");
-    let _ = std::fs::create_dir_all(&state);
-    let text = format!("{{\"unread\": {unread}, \"inbox\": {}}}\n", inbox.len());
-    let path = state.join("notifications.json");
-    if std::fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {
-        return;
-    }
-    let tmp = state.join(".notifications.json.tmp");
-    if std::fs::write(&tmp, text).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
-}
-
-fn ingest(store: &Shared, dir: &Path) -> bool {
+fn ingest(st: &State, dir: &Path) -> bool {
     let (live, history) = omarchy::read(dir);
-    match store.lock() {
+    match st.store.lock() {
         Ok(mut s) => s.ingest(&live, &history, now()).unwrap_or_else(|e| {
             eprintln!("nyx-notifyd: {e}");
             false
@@ -165,17 +41,13 @@ fn ingest(store: &Shared, dir: &Path) -> bool {
     }
 }
 
-fn announce(store: &Shared, conn: &zbus::blocking::Connection) {
-    if let Ok(s) = store.lock() {
-        publish(&s);
-    }
-    if let Ok(iface) = conn.object_server().interface::<_, Service>(PATH) {
-        let _ = zbus::block_on(Service::changed(iface.signal_emitter()));
-    }
+fn announce(st: &State) {
+    zbus::block_on(state::changed(st));
 }
 
 /// Copy new notifications in whenever Omarchy writes its files.
-fn watch(store: Shared, conn: zbus::blocking::Connection, dir: PathBuf) {
+fn watch(st: Arc<State>) {
+    let dir = st.dir.clone();
     use inotify::{Inotify, WatchMask};
     loop {
         let _ = std::fs::create_dir_all(&dir);
@@ -184,8 +56,8 @@ fn watch(store: Shared, conn: zbus::blocking::Connection, dir: PathBuf) {
             std::thread::sleep(Duration::from_secs(10));
             continue;
         }
-        if ingest(&store, &dir) {
-            announce(&store, &conn);
+        if ingest(&st, &dir) {
+            announce(&st);
         }
         let mut buf = [0u8; 4096];
         'events: loop {
@@ -203,8 +75,8 @@ fn watch(store: Shared, conn: zbus::blocking::Connection, dir: PathBuf) {
             // The shell writes in bursts: wait for it to settle, then read once.
             std::thread::sleep(Duration::from_millis(150));
             while ino.read_events(&mut buf).is_ok_and(|mut e| e.next().is_some()) {}
-            if ingest(&store, &dir) {
-                announce(&store, &conn);
+            if ingest(&st, &dir) {
+                announce(&st);
             }
         }
         // The folder went away (or the watch failed): start over.
@@ -222,40 +94,26 @@ fn local_minute() -> (u16, u64) {
     }
 }
 
-fn set_dnd(on: bool, dir: &Path) {
-    if omarchy::dnd(dir) == on {
-        return;
-    }
-    let ok = std::process::Command::new("omarchy-shell")
-        .args(["-q", "notifications", "setDnd", if on { "on" } else { "off" }])
-        .status()
-        .is_ok_and(|s| s.success());
-    if ok {
-        let _ = std::process::Command::new("omarchy-shell").args(["-q", "omarchy.indicators", "refresh"]).status();
-    } else {
-        eprintln!("nyx-notifyd: couldn't switch Do not disturb {}", if on { "on" } else { "off" });
-    }
-}
-
 /// The Do not disturb schedule and hourly retention. DND is switched only when the
 /// quiet hours start or end (or the schedule is changed), so switching it by hand in
 /// between sticks.
-fn schedule(store: Shared, conn: zbus::blocking::Connection, dir: PathBuf, wake: mpsc::Receiver<()>) {
+fn schedule(st: Arc<State>, wake: mpsc::Receiver<()>) {
     let mut last: Option<bool> = None;
     let mut last_prune = 0.0;
     loop {
-        let settings = store.lock().map(|s| s.settings()).unwrap_or_default();
+        let settings = st.store.lock().map(|s| s.settings()).unwrap_or_default();
         let (minute, sec) = local_minute();
         let quiet = settings.schedule.quiet_at(minute);
         if settings.schedule.enabled && last != Some(quiet) {
-            set_dnd(quiet, &dir);
+            st.set_dnd(quiet);
         }
         last = settings.schedule.enabled.then_some(quiet);
         if now() - last_prune > 3600.0 {
             last_prune = now();
-            if store.lock().map(|mut s| s.prune(now()).unwrap_or(false)).unwrap_or(false) {
-                announce(&store, &conn);
+            if st.store.lock().map(|mut s| s.prune(now()).unwrap_or(false)).unwrap_or(false) {
+                announce(&st);
             }
+            image::prune(settings.retention_days);
         }
         // Next minute boundary while a schedule is on; otherwise just the hourly prune.
         let wait = if settings.schedule.enabled { 60 - sec.min(59) } else { 3600 };
@@ -266,34 +124,85 @@ fn schedule(store: Shared, conn: zbus::blocking::Connection, dir: PathBuf, wake:
 }
 
 fn main() -> std::process::ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
     let path = Store::default_path();
-    let store = match Store::open(&path) {
-        Ok(s) => Arc::new(Mutex::new(s)),
+    let mut store = match Store::open(&path) {
+        Ok(s) => s,
         Err(e) => {
             eprintln!("nyx-notifyd: can't open {}: {e}", path.display());
             return std::process::ExitCode::FAILURE;
         }
     };
-    let dir = omarchy::dir();
-    if let Ok(s) = store.lock() {
-        publish(&s);
+    if args.first().map(String::as_str) == Some("--mode") {
+        println!("{}", store.meta("mode").unwrap_or_else(|| "omarchy".into()));
+        return std::process::ExitCode::SUCCESS;
     }
+    if args.first().map(String::as_str) == Some("--set-mode") {
+        return match args.get(1).map(String::as_str) {
+            Some(m @ ("nyx" | "omarchy")) => match store.set_meta("mode", m) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("nyx-notifyd: {e}");
+                    std::process::ExitCode::FAILURE
+                }
+            },
+            _ => {
+                eprintln!("Usage: nyx-notifyd --set-mode nyx|omarchy");
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+    let nyx_mode = match std::env::var("NYX_NOTIFYD_MODE").ok().as_deref() {
+        Some("nyx") => true,
+        Some("omarchy") => false,
+        _ => store.meta("mode").as_deref() == Some("nyx"),
+    };
+    // Whatever was open when the service stopped can't be answered any more: the apps
+    // that sent it have forgotten the ids.
+    if nyx_mode && let Ok(open) = store.open_notes() {
+        let ids: Vec<i64> = open.iter().map(|n| n.id).collect();
+        let _ = store.close(&ids, "expired", now());
+    }
+    state::publish(&store);
     let (tx, rx) = mpsc::channel();
-    let conn = match zbus::blocking::connection::Builder::session()
+    let st = Arc::new(State {
+        store: Mutex::new(store),
+        nyx_mode,
+        dir: omarchy::dir(),
+        settings_changed: Mutex::new(tx),
+        generation: Mutex::default(),
+        conn: OnceLock::new(),
+    });
+    let built = zbus::blocking::connection::Builder::session()
         .and_then(|b| b.name(BUS))
-        .and_then(|b| b.serve_at(PATH, Service { store: store.clone(), settings_changed: tx }))
-        .and_then(|b| b.build())
-    {
+        .and_then(|b| b.serve_at(state::PATH, service::Service { state: st.clone() }))
+        .and_then(|b| if nyx_mode { b.serve_at(fdo::PATH, fdo::Notifications { state: st.clone() }) } else { Ok(b) })
+        .and_then(|b| b.build());
+    let conn = match built {
         Ok(c) => c,
         Err(e) => {
             eprintln!("nyx-notifyd: session bus: {e}");
             return std::process::ExitCode::FAILURE;
         }
     };
-    {
-        let (store, conn, dir) = (store.clone(), conn.clone(), dir.clone());
-        std::thread::spawn(move || schedule(store, conn, dir, rx));
+    let _ = st.conn.set(conn.inner().clone());
+    if nyx_mode {
+        // Queued if Omarchy's shell still has it; ours as soon as it lets go.
+        match conn.request_name_with_flags(fdo::NAME, zbus::fdo::RequestNameFlags::AllowReplacement.into()) {
+            Ok(zbus::fdo::RequestNameReply::PrimaryOwner | zbus::fdo::RequestNameReply::AlreadyOwner) => {}
+            Ok(r) => eprintln!("nyx-notifyd: {} is taken ({r:?}); waiting for it", fdo::NAME),
+            Err(e) => eprintln!("nyx-notifyd: {}: {e}", fdo::NAME),
+        }
     }
-    watch(store, conn, dir);
+    {
+        let st = st.clone();
+        std::thread::spawn(move || schedule(st, rx));
+    }
+    if nyx_mode {
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    }
+    watch(st);
     std::process::ExitCode::FAILURE
 }

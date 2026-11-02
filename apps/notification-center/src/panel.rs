@@ -118,8 +118,11 @@ impl Panel {
 
     fn ctx(&self) -> Ctx {
         let w = self.weak();
-        let words: Vec<String> =
-            if self.view.get() == View::History { self.search.text().split_whitespace().map(String::from).collect() } else { Vec::new() };
+        let words: Vec<String> = if self.view.get() == View::History {
+            self.search.text().split_whitespace().map(String::from).collect()
+        } else {
+            Vec::new()
+        };
         Ctx {
             hide: Rc::new(move || {
                 if let Some(p) = w.upgrade() {
@@ -502,7 +505,11 @@ impl Panel {
             dd.connect_changed(move |i| {
                 let minute = (i * 30) as u16;
                 let mut s = state.borrow_mut();
-                if is_from { s.schedule.from = minute } else { s.schedule.to = minute }
+                if is_from {
+                    s.schedule.from = minute
+                } else {
+                    s.schedule.to = minute
+                }
                 drop(s);
                 save();
             });

@@ -15,16 +15,13 @@ fn bus() -> Result<gio::DBusConnection, String> {
 }
 
 async fn call(method: &str, args: Option<glib::Variant>) -> Result<glib::Variant, String> {
-    bus()?
-        .call_future(Some(BUS), PATH, IFACE, method, args.as_ref(), None, gio::DBusCallFlags::NONE, 10_000)
-        .await
-        .map_err(|e| {
-            if e.matches(gio::DBusError::ServiceUnknown) || e.matches(gio::DBusError::NameHasNoOwner) {
-                "The notification service (nyx-notifyd) isn't running".to_string()
-            } else {
-                e.message().to_string()
-            }
-        })
+    bus()?.call_future(Some(BUS), PATH, IFACE, method, args.as_ref(), None, gio::DBusCallFlags::NONE, 10_000).await.map_err(|e| {
+        if e.matches(gio::DBusError::ServiceUnknown) || e.matches(gio::DBusError::NameHasNoOwner) {
+            "The notification service (nyx-notifyd) isn't running".to_string()
+        } else {
+            e.message().to_string()
+        }
+    })
 }
 
 async fn get<T: DeserializeOwned>(method: &str, args: Option<glib::Variant>) -> Result<T, String> {
@@ -84,7 +81,15 @@ pub async fn delete_history() -> Result<(), String> {
 /// Call `f` on every `Changed` until the returned subscription is dropped.
 pub fn on_changed(f: impl Fn() + 'static) -> Option<gio::SignalSubscription> {
     let bus = bus().ok()?;
-    Some(bus.subscribe_to_signal(Some(BUS), Some(IFACE), Some("Changed"), Some(PATH), None, gio::DBusSignalFlags::NONE, move |_| f()))
+    Some(bus.subscribe_to_signal(
+        Some(BUS),
+        Some(IFACE),
+        Some("Changed"),
+        Some(PATH),
+        None,
+        gio::DBusSignalFlags::NONE,
+        move |_| f(),
+    ))
 }
 
 /// Omarchy's notification state folder.

@@ -42,14 +42,7 @@ impl Choice {
         scroll.set_child(Some(&list));
         pop.set_child(Some(&scroll));
         button.set_popover(Some(&pop));
-        let c = Choice {
-            button,
-            label,
-            list,
-            items: Rc::default(),
-            selected: Rc::new(Cell::new(0)),
-            on_change: Rc::default(),
-        };
+        let c = Choice { button, label, list, items: Rc::default(), selected: Rc::new(Cell::new(0)), on_change: Rc::default() };
         c.set_items(items, selected);
         let me = c.clone();
         c.list.connect_row_activated(move |_, row| {

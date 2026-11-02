@@ -10,7 +10,11 @@ repository.workspace = true
 [dependencies]
 inotify = "0.11"
 libc = "0.2"
+png = "0.18"
 nyx-notify-store = { path = "../../crates/nyx-notify-store" }
 serde = "1"
 serde_json = "1"
 zbus = "5"
+
+[dev-dependencies]
+serde = "1"

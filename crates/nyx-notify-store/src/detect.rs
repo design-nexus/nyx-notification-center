@@ -7,8 +7,10 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 static CODE_WORDS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(code|otp|one[\s-]?time|verification|verify|passcode|pin|2fa|two[\s-]factor|security key|confirm(?:ation)?)\b")
-        .unwrap()
+    Regex::new(
+        r"(?i)\b(code|otp|one[\s-]?time|verification|verify|passcode|pin|2fa|two[\s-]factor|security key|confirm(?:ation)?)\b",
+    )
+    .unwrap()
 });
 // "482913", "482 913", "84 2139", "482-913", "G-482913".
 static CODE_SHAPE: LazyLock<Regex> =

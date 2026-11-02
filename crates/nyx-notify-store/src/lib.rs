@@ -64,6 +64,9 @@ pub struct Note {
     pub codes: Vec<String>,
     /// The id the sending app knows it by, while it's open (stage B).
     pub live_id: Option<u32>,
+    /// Passing (the `transient` hint): closes when its pop-up does.
+    #[serde(default)]
+    pub transient: bool,
 }
 
 impl Note {
@@ -122,7 +125,13 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { retention_days: 30, schedule: Schedule::default(), excluded: Vec::new(), no_popups: Vec::new(), hide_popup_text: false }
+        Settings {
+            retention_days: 30,
+            schedule: Schedule::default(),
+            excluded: Vec::new(),
+            no_popups: Vec::new(),
+            hide_popup_text: false,
+        }
     }
 }
 
@@ -184,7 +193,7 @@ CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), json
 ";
 
 const COLUMNS: &str = "id, key, app, app_icon, glyph, summary, body, urgency, exec_argv, exec_actions, ts, closed_ts, \
-                       closed_reason, live, read, dismissed, pinned, app_actions, desktop_entry, image, live_id";
+                       closed_reason, live, read, dismissed, pinned, app_actions, desktop_entry, image, live_id, transient";
 
 /// Columns added after the first release, with their definitions.
 const ADDED: &[(&str, &str)] = &[
@@ -222,6 +231,7 @@ fn note(r: &rusqlite::Row) -> Result<Note> {
         image: r.get(19)?,
         codes: Vec::new(),
         live_id: r.get::<_, Option<i64>>(20)?.map(|v| v as u32),
+        transient: r.get(21)?,
     })
     .map(|mut n| {
         n.codes = detect::codes(&n.summary, &n.body);
@@ -291,8 +301,10 @@ impl Store {
         db.pragma_update(None, "journal_mode", "WAL")?;
         db.busy_timeout(std::time::Duration::from_secs(2))?;
         db.execute_batch(SCHEMA)?;
-        let have: Vec<String> =
-            db.prepare("SELECT name FROM pragma_table_info('notifications')")?.query_map([], |r| r.get(0))?.collect::<Result<_>>()?;
+        let have: Vec<String> = db
+            .prepare("SELECT name FROM pragma_table_info('notifications')")?
+            .query_map([], |r| r.get(0))?
+            .collect::<Result<_>>()?;
         for (col, def) in ADDED {
             if !have.iter().any(|h| h == col) {
                 db.execute_batch(&format!("ALTER TABLE notifications ADD COLUMN {col} {def}"))?;
@@ -307,9 +319,9 @@ impl Store {
 
     /// Where it lives: `~/.local/share/nyx/notifications.db`.
     pub fn default_path() -> std::path::PathBuf {
-        let data = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| {
-            std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
-        });
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
         data.join("nyx/notifications.db")
     }
 
@@ -354,9 +366,7 @@ impl Store {
             }
             on_screen.push(row.key.clone());
             let existing: Option<(String, String)> = tx
-                .query_row("SELECT summary, body FROM notifications WHERE key = ?1", [&row.key], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
-                })
+                .query_row("SELECT summary, body FROM notifications WHERE key = ?1", [&row.key], |r| Ok((r.get(0)?, r.get(1)?)))
                 .optional()?;
             match existing {
                 None => {
@@ -392,9 +402,8 @@ impl Store {
             if excluded.contains(&row.app) || gone(&row.key)? {
                 continue;
             }
-            let known: Option<Option<String>> = tx
-                .query_row("SELECT closed_reason FROM notifications WHERE key = ?1", [&row.key], |r| r.get(0))
-                .optional()?;
+            let known: Option<Option<String>> =
+                tx.query_row("SELECT closed_reason FROM notifications WHERE key = ?1", [&row.key], |r| r.get(0)).optional()?;
             match known {
                 None => {
                     insert(&tx, row, false)?;
@@ -474,7 +483,12 @@ impl Store {
         )?;
         let mut apps: Vec<App> = stmt
             .query_map([], |r| {
-                Ok(App { app: r.get(0)?, app_icon: r.get::<_, Option<String>>(1)?.unwrap_or_default(), count: r.get(2)?, excluded: false })
+                Ok(App {
+                    app: r.get(0)?,
+                    app_icon: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    count: r.get(2)?,
+                    excluded: false,
+                })
             })?
             .collect::<Result<_>>()?;
         for a in &mut apps {
@@ -490,7 +504,8 @@ impl Store {
 
     pub fn set_pinned(&mut self, id: i64, pinned: bool) -> Result<bool> {
         let n = if pinned {
-            self.db.execute("UPDATE notifications SET pinned = 1, pinned_ts = ?2 WHERE id = ?1 AND pinned = 0", params![id, now()])?
+            self.db
+                .execute("UPDATE notifications SET pinned = 1, pinned_ts = ?2 WHERE id = ?1 AND pinned = 0", params![id, now()])?
         } else {
             self.db.execute("UPDATE notifications SET pinned = 0, pinned_ts = NULL WHERE id = ?1 AND pinned = 1", [id])?
         };
@@ -546,9 +561,7 @@ impl Store {
     /// older than Omarchy's own history.
     pub fn prune(&mut self, now: f64) -> Result<bool> {
         let days = self.settings().retention_days;
-        let n = self
-            .db
-            .execute("DELETE FROM notifications WHERE pinned = 0 AND ts < ?1", [now - f64::from(days) * 86_400.0])?;
+        let n = self.db.execute("DELETE FROM notifications WHERE pinned = 0 AND ts < ?1", [now - f64::from(days) * 86_400.0])?;
         self.db.execute("DELETE FROM gone WHERE ts < ?1", [now - 3.0 * 86_400.0])?;
         Ok(n > 0)
     }
@@ -558,7 +571,8 @@ impl Store {
     }
 
     pub fn set_meta(&mut self, key: &str, value: &str) -> Result<()> {
-        self.db.execute("INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2", [key, value])?;
+        self.db
+            .execute("INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2", [key, value])?;
         Ok(())
     }
 
@@ -653,7 +667,10 @@ impl Store {
 
     /// Its pop-up has gone; it stays open in the Inbox.
     pub fn popup_over(&mut self, live_id: u32) -> Result<bool> {
-        Ok(self.db.execute("UPDATE notifications SET live = 0 WHERE live_id = ?1 AND closed_reason IS NULL AND live = 1", [live_id])? > 0)
+        Ok(self
+            .db
+            .execute("UPDATE notifications SET live = 0 WHERE live_id = ?1 AND closed_reason IS NULL AND live = 1", [live_id])?
+            > 0)
     }
 
     /// Close notifications that are still open, recording why (`expired`, `dismissed`,
@@ -699,7 +716,12 @@ impl Store {
     pub fn open_among(&self, ids: &[i64]) -> Result<Vec<i64>> {
         let mut out = Vec::new();
         for id in ids {
-            if self.db.query_row("SELECT 1 FROM notifications WHERE id = ?1 AND closed_reason IS NULL", [id], |_| Ok(())).optional()?.is_some() {
+            if self
+                .db
+                .query_row("SELECT 1 FROM notifications WHERE id = ?1 AND closed_reason IS NULL", [id], |_| Ok(()))
+                .optional()?
+                .is_some()
+            {
                 out.push(*id);
             }
         }
