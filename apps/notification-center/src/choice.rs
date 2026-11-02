@@ -6,6 +6,8 @@ use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+type OnChange = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
+
 #[derive(Clone)]
 pub struct Choice {
     pub button: gtk::MenuButton,
@@ -13,7 +15,7 @@ pub struct Choice {
     list: gtk::ListBox,
     items: Rc<RefCell<Vec<String>>>,
     selected: Rc<Cell<usize>>,
-    on_change: Rc<RefCell<Option<Box<dyn Fn(usize)>>>>,
+    on_change: OnChange,
 }
 
 impl Choice {
