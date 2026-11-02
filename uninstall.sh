@@ -19,7 +19,8 @@ state="${XDG_STATE_HOME:-$HOME/.local/state}"
 systemctl --user disable --now nyx-notification-center.service nyx-notifyd.service 2>/dev/null || true
 rm -f "$bin/nyx-notification-center" "$bin/nyx-notifyd" \
   "$config/systemd/user/nyx-notification-center.service" "$config/systemd/user/nyx-notifyd.service" \
-  "$share/dbus-1/services/io.github.design_nexus.nyx.Notifications.service" "$state/nyx/notifications.json"
+  "$share/dbus-1/services/io.github.design_nexus.nyx.Notifications.service" "$state/nyx/notifications.json" \
+  "$share/dbus-1/services/org.freedesktop.Notifications.service"
 for p in design-nexus.notification-center design-nexus.notifications; do
   omarchy-plugin-disable "$p" >/dev/null 2>&1 || true
   rm -rf "$config/omarchy/plugins/$p"

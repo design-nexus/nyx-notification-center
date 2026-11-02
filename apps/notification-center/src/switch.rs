@@ -13,6 +13,29 @@ use std::time::{Duration, Instant};
 
 const BRIDGE: &str = "design-nexus.notifications";
 
+/// In Nyx mode, a notification sent while nyx-notifyd is down (restarting, say) starts
+/// it instead of failing: D-Bus activation for the standard name, through systemd.
+fn activation_file() -> std::path::PathBuf {
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
+    data.join("dbus-1/services/org.freedesktop.Notifications.service")
+}
+
+fn set_activation(on: bool) {
+    let path = activation_file();
+    if on {
+        let _ = std::fs::create_dir_all(path.parent().expect("has a parent"));
+        let text = "[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/bin/false\nSystemdService=nyx-notifyd.service\n";
+        if let Err(e) = std::fs::write(&path, text) {
+            eprintln!("  {}: {e}", path.display());
+        }
+    } else {
+        let _ = std::fs::remove_file(&path);
+    }
+    run(&["busctl", "--user", "call", "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "ReloadConfig"]);
+}
+
 fn run(args: &[&str]) -> bool {
     match Command::new(args[0]).args(&args[1..]).output() {
         Ok(o) if o.status.success() => true,
@@ -92,6 +115,7 @@ pub fn use_nyx() -> ExitCode {
     }
     run(&["omarchy-plugin-enable", BRIDGE]);
     run(&["omarchy-plugin-disable", "omarchy.notifications"]);
+    set_activation(true);
     run(&["systemctl", "--user", "restart", "nyx-notifyd.service"]);
     if wait_for("Nyx", 6) {
         println!("Done: Nyx shows the pop-ups. Switch back with: nyx-notification-center --use-omarchy-popups");
@@ -113,6 +137,7 @@ pub fn use_nyx() -> ExitCode {
 pub fn use_omarchy() -> ExitCode {
     println!("Switching notifications back to Omarchy…");
     run(&["nyx-notifyd", "--set-mode", "omarchy"]);
+    set_activation(false);
     run(&["omarchy-plugin-disable", BRIDGE]);
     run(&["omarchy-plugin-enable", "omarchy.notifications"]);
     run(&["systemctl", "--user", "restart", "nyx-notifyd.service"]);
