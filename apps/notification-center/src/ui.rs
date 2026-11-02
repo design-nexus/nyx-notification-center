@@ -1,4 +1,4 @@
-//! Small building blocks: icons, labels, buttons, times, starting programs.
+//! Small building blocks: icons, labels, buttons, times.
 
 use gtk::glib;
 use gtk::prelude::*;
@@ -43,39 +43,6 @@ pub fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
         w.add_css_class(class);
     } else {
         w.remove_css_class(class);
-    }
-}
-
-fn detached(args: &[&str]) -> std::process::Command {
-    let mut cmd = std::process::Command::new("setsid");
-    cmd.arg("-f");
-    let uwsm = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("uwsm-app").is_file()));
-    if uwsm {
-        cmd.args(["uwsm-app", "--"]);
-    }
-    cmd.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    cmd
-}
-
-/// Start a program the way Omarchy's launcher does, detached from the panel.
-pub fn launch(args: &[&str]) {
-    match detached(args).spawn() {
-        Ok(mut c) => {
-            std::thread::spawn(move || c.wait());
-        }
-        Err(e) => eprintln!("nyx-notification-center: couldn't start {}: {e}", args.join(" ")),
-    }
-}
-
-/// Run a short command for its effect, without waiting.
-pub fn spawn(args: &[&str]) {
-    let mut cmd = std::process::Command::new(args[0]);
-    cmd.args(&args[1..]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null());
-    match cmd.spawn() {
-        Ok(mut c) => {
-            std::thread::spawn(move || c.wait());
-        }
-        Err(e) => eprintln!("nyx-notification-center: couldn't run {}: {e}", args[0]),
     }
 }
 

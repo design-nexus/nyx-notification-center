@@ -70,6 +70,7 @@ pub struct Panel {
     pending: Cell<bool>,
     me: RefCell<Weak<Panel>>,
     panel1: RefCell<Option<nyx_desktop::panel::Panel>>,
+    popups: RefCell<Option<Rc<crate::popups::Popups>>>,
 }
 
 fn scrolled(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
@@ -112,6 +113,10 @@ impl Panel {
         self.window.is_visible()
     }
 
+    pub fn set_popups(&self, p: Rc<crate::popups::Popups>) {
+        *self.popups.borrow_mut() = Some(p);
+    }
+
     fn weak(&self) -> Weak<Panel> {
         self.me.borrow().clone()
     }
@@ -130,6 +135,7 @@ impl Panel {
                 }
             }),
             highlight: Rc::new(words),
+            hide_text: false,
         }
     }
 
@@ -142,6 +148,10 @@ impl Panel {
             self.catcher.set_monitor(Some(&m));
         }
         self.content.set_visible_child_name("main");
+        // Pop-ups make way: everything they showed is in here.
+        if let Some(p) = self.popups.borrow().as_ref() {
+            p.clear();
+        }
         self.catcher.present();
         self.window.present();
         if let Some(p) = self.panel1.borrow().as_ref() {
@@ -610,8 +620,15 @@ impl Panel {
 
     /// The focused screen (or `--only`'s).
     fn target_monitor(&self) -> Option<gdk::Monitor> {
-        let name = match &self.only {
-            Some(o) => o.clone(),
+        focused_monitor(self.only.as_deref())
+    }
+}
+
+/// The focused screen, or the one named.
+pub fn focused_monitor(only: Option<&str>) -> Option<gdk::Monitor> {
+    {
+        let name = match only {
+            Some(o) => o.to_string(),
             None => nyx_desktop::hypr::Instance::find()
                 .ok()
                 .and_then(|i| i.json::<Vec<serde_json::Value>>("monitors").ok())
@@ -806,6 +823,7 @@ pub fn build(app: &gtk::Application, only: Option<String>) -> Rc<Panel> {
         pending: Cell::new(false),
         me: RefCell::default(),
         panel1: RefCell::default(),
+        popups: RefCell::default(),
     });
     *panel.me.borrow_mut() = Rc::downgrade(&panel);
     let weak = Rc::downgrade(&panel);

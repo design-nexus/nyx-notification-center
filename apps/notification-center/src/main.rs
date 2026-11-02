@@ -9,6 +9,7 @@ mod card;
 mod choice;
 mod client;
 mod panel;
+mod popups;
 mod theme;
 mod ui;
 
@@ -48,7 +49,11 @@ fn main() -> std::process::ExitCode {
         }
         let only = args.iter().position(|a| a == "--only").and_then(|i| args.get(i + 1)).cloned();
         if p.borrow().is_none() {
-            *p.borrow_mut() = Some(panel::build(app, only));
+            let panel = panel::build(app, only.clone());
+            let w = Rc::downgrade(&panel);
+            let pops = popups::start(app, only, Rc::new(move || w.upgrade().is_some_and(|p| p.is_open())));
+            panel.set_popups(pops);
+            *p.borrow_mut() = Some(panel);
         }
         let panel = p.borrow().clone().expect("built");
         if let Some(i) = args.iter().position(|a| a == "--toggle") {

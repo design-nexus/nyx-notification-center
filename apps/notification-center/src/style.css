@@ -337,3 +337,39 @@ window.nyx-notification-center switch:checked {
 tooltip {
   border-radius: 7px;
 }
+
+/* ---------- Pop-ups (stage B) ---------- */
+
+window.nyx-notification-center.nc-popups {
+  background: none;
+}
+
+window.nyx-notification-center .nc-popup {
+  background: @theme_popover;
+  border: 1px solid @theme_border;
+  border-radius: 15px;
+  padding: 12px 14px;
+  font-family: "Inter", sans-serif;
+  color: @theme_text;
+  box-shadow: 0 10px 28px alpha(black, 0.35);
+  margin: 2px 4px 10px;
+}
+
+window.nyx-notification-center .nc-popup.hover {
+  background: mix(@theme_popover, @theme_text, 0.04);
+}
+
+window.nyx-notification-center .nc-popup .nc-hover {
+  background: @theme_popover;
+}
+
+window.nyx-notification-center .nc-picture-frame {
+  border-radius: 8px;
+  min-width: 30px;
+  min-height: 30px;
+}
+
+window.nyx-notification-center button.nc-code {
+  font-feature-settings: "tnum";
+  letter-spacing: 0.04em;
+}

@@ -101,7 +101,58 @@ pub fn dnd() -> bool {
     nyx_notify_store::omarchy::dnd(&omarchy_dir())
 }
 
-/// Switch Do not disturb the way Omarchy's keybinding does, so the bar follows.
+/// Switch Do not disturb (nyx-notifyd writes it, or asks Omarchy, by mode).
 pub fn toggle_dnd() {
-    crate::ui::spawn(&["omarchy-toggle-notification-silencing"]);
+    crate::ui::act(async { call("ToggleDnd", None).await.map(|_| ()) });
+}
+
+async fn flag(method: &str, args: Option<glib::Variant>) -> Result<bool, String> {
+    let v = call(method, args).await?;
+    Ok(v.child_value(0).get::<bool>().unwrap_or(false))
+}
+
+/// A click: whatever the notification asks for. Whether anything happened.
+pub async fn activate(id: i64) -> Result<bool, String> {
+    flag("Activate", Some((id,).to_variant())).await
+}
+
+/// One of the app's own buttons.
+pub async fn invoke_action(id: i64, key: &str) -> Result<bool, String> {
+    flag("InvokeAction", Some((id, key).to_variant())).await
+}
+
+/// One of Omarchy's command buttons, by position.
+pub async fn run_action(id: i64, index: u32) -> Result<bool, String> {
+    flag("RunAction", Some((id, index).to_variant())).await
+}
+
+/// A pop-up went: `timeout` or `dismissed`.
+pub async fn popup_ended(id: i64, reason: &str) -> Result<(), String> {
+    call("PopupEnded", Some((id, reason).to_variant())).await.map(|_| ())
+}
+
+/// `Popup(payload)` and `PopupClosed(id)` from nyx-notifyd, for as long as the
+/// returned subscriptions are kept.
+pub fn on_popups(show: impl Fn(String) + 'static, closed: impl Fn(i64) + 'static) -> Vec<gio::SignalSubscription> {
+    let Ok(bus) = bus() else { return Vec::new() };
+    let a =
+        bus.subscribe_to_signal(Some(BUS), Some(IFACE), Some("Popup"), Some(PATH), None, gio::DBusSignalFlags::NONE, move |s| {
+            if let Some(p) = s.parameters.child_value(0).str() {
+                show(p.to_string());
+            }
+        });
+    let b = bus.subscribe_to_signal(
+        Some(BUS),
+        Some(IFACE),
+        Some("PopupClosed"),
+        Some(PATH),
+        None,
+        gio::DBusSignalFlags::NONE,
+        move |s| {
+            if let Some(id) = s.parameters.child_value(0).get::<i64>() {
+                closed(id);
+            }
+        },
+    );
+    vec![a, b]
 }

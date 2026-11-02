@@ -14,6 +14,8 @@ pub enum Place {
     Inbox,
     Pinned,
     History,
+    /// A pop-up (stage B).
+    Popup,
 }
 
 /// What a card can ask of the panel.
@@ -22,6 +24,8 @@ pub struct Ctx {
     pub hide: Rc<dyn Fn()>,
     /// Words to mark in the text (history search).
     pub highlight: Rc<Vec<String>>,
+    /// Show only the app and title (the privacy setting, for pop-ups).
+    pub hide_text: bool,
 }
 
 /// The app's icon: its theme icon or file, else Omarchy's glyph, else a generic one.
@@ -105,23 +109,23 @@ fn marked(text: &str, words: &[String]) -> String {
 }
 
 /// The app's icon name is its desktop id (as Nyx apps and most others send it).
-fn has_desktop(app_icon: &str) -> bool {
-    !app_icon.is_empty() && !app_icon.contains('/') && gio_unix::DesktopAppInfo::new(&format!("{app_icon}.desktop")).is_some()
+fn has_desktop(id: &str) -> bool {
+    !id.is_empty() && !id.contains('/') && gio_unix::DesktopAppInfo::new(&format!("{id}.desktop")).is_some()
 }
 
-/// What clicking does: the sender's command, else open its app. Returns whether
-/// anything ran.
-pub fn activate(n: &Note) -> bool {
-    if let Some(argv) = &n.exec_argv {
-        let args: Vec<&str> = argv.iter().map(String::as_str).collect();
-        ui::launch(&args);
-        return true;
+/// Something happens when it's clicked.
+fn clickable(n: &Note) -> bool {
+    n.exec_argv.is_some()
+        || (n.open() && n.app_actions.iter().any(|a| a.key == "default"))
+        || has_desktop(&n.desktop_entry)
+        || has_desktop(&n.app_icon)
+}
+
+/// Put text on the clipboard (a verification code).
+fn copy(text: &str) {
+    if let Some(d) = gdk::Display::default() {
+        d.clipboard().set_text(text);
     }
-    if has_desktop(&n.app_icon) {
-        ui::launch(&["gtk-launch", &format!("{}.desktop", n.app_icon)]);
-        return true;
-    }
-    false
 }
 
 pub fn card(n: &Note, place: Place, ctx: &Ctx, now: f64) -> gtk::Widget {
@@ -130,7 +134,20 @@ pub fn card(n: &Note, place: Place, ctx: &Ctx, now: f64) -> gtk::Widget {
     set_class(&overlay, "unread", !n.read && place == Place::Inbox);
 
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    let ai = app_icon(&n.app_icon, &n.glyph, 30);
+    // A picture sent with it (an avatar, a cover) stands in for the app's icon.
+    let ai: gtk::Widget = if !n.image.is_empty() && std::path::Path::new(&n.image).is_file() {
+        let pic = gtk::Image::from_file(&n.image);
+        pic.set_pixel_size(30);
+        let frame = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        frame.set_overflow(gtk::Overflow::Hidden);
+        frame.add_css_class("nc-picture-frame");
+        frame.set_halign(gtk::Align::Start);
+        frame.set_valign(gtk::Align::Start);
+        frame.append(&pic);
+        frame.upcast()
+    } else {
+        app_icon(&n.app_icon, &n.glyph, 30)
+    };
     ai.set_valign(gtk::Align::Start);
     ai.add_css_class("nc-app-icon");
     row.append(&ai);
@@ -151,7 +168,7 @@ pub fn card(n: &Note, place: Place, ctx: &Ctx, now: f64) -> gtk::Widget {
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     top.append(&spacer);
-    let when = gtk::Label::new(Some(&ui::when(n.ts, now)));
+    let when = gtk::Label::new(Some(&if place == Place::Popup { "now".to_string() } else { ui::when(n.ts, now) }));
     when.add_css_class("nc-when");
     top.append(&when);
     body.append(&top);
@@ -167,7 +184,7 @@ pub fn card(n: &Note, place: Place, ctx: &Ctx, now: f64) -> gtk::Widget {
     title.set_markup(&marked(if n.summary.is_empty() { &n.app } else { &n.summary }, &ctx.highlight));
     title_row.append(&title);
     body.append(&title_row);
-    if !n.body.is_empty() {
+    if !n.body.is_empty() && !ctx.hide_text {
         let text = label("", "nc-text");
         // One paragraph, so the three-line limit holds (Pango counts it per paragraph).
         let flat = n.body.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -178,30 +195,57 @@ pub fn card(n: &Note, place: Place, ctx: &Ctx, now: f64) -> gtk::Widget {
         text.set_ellipsize(gtk::pango::EllipsizeMode::End);
         body.append(&text);
     }
-    // The sender's own buttons (Omarchy's command buttons outlive the pop-up).
-    if !n.actions.is_empty() {
-        let acts = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        acts.add_css_class("nc-actions");
-        for a in n.actions.iter().take(3) {
+    // Buttons: a code to copy, the app's own (while it's open), Omarchy's commands.
+    let acts = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    acts.add_css_class("nc-actions");
+    if !ctx.hide_text {
+        for code in n.codes.iter().take(2) {
+            let b = gtk::Button::new();
+            b.add_css_class("nc-action");
+            b.add_css_class("nc-code");
+            let inner = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            inner.append(&icon("edit-copy-symbolic", 13));
+            inner.append(&gtk::Label::new(Some(code)));
+            b.set_child(Some(&inner));
+            b.set_tooltip_text(Some("Copy the code"));
+            let code = code.clone();
+            b.connect_clicked(move |b| {
+                copy(&code);
+                b.set_tooltip_text(Some("Copied"));
+            });
+            acts.append(&b);
+        }
+    }
+    if n.open() {
+        for a in n.app_actions.iter().filter(|a| a.key != "default" && !a.label.trim().is_empty()).take(3) {
             let b = gtk::Button::with_label(&a.label);
             b.add_css_class("nc-action");
-            let (argv, id, hide, place) = (a.argv.clone(), n.id, ctx.hide.clone(), place);
+            let (id, key, hide) = (n.id, a.key.clone(), ctx.hide.clone());
             b.connect_clicked(move |_| {
-                let args: Vec<&str> = argv.iter().map(String::as_str).collect();
-                ui::launch(&args);
-                if place == Place::Inbox {
-                    act(client::dismiss(vec![id]));
-                }
+                let key = key.clone();
+                act(async move { client::invoke_action(id, &key).await.map(|_| ()) });
                 hide();
             });
             acts.append(&b);
         }
+    }
+    for (i, a) in n.actions.iter().enumerate().take(3) {
+        let b = gtk::Button::with_label(&a.label);
+        b.add_css_class("nc-action");
+        let (id, hide) = (n.id, ctx.hide.clone());
+        b.connect_clicked(move |_| {
+            act(async move { client::run_action(id, i as u32).await.map(|_| ()) });
+            hide();
+        });
+        acts.append(&b);
+    }
+    if acts.first_child().is_some() {
         body.append(&acts);
     }
     row.append(&body);
     overlay.set_child(Some(&row));
 
-    // Hover: pin, and dismiss (Inbox) or delete (Pinned, History).
+    // Hover: pin, and dismiss (Inbox, pop-ups) or delete (Pinned, History).
     let hover = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     hover.add_css_class("nc-hover");
     hover.set_halign(gtk::Align::End);
@@ -212,6 +256,11 @@ pub fn card(n: &Note, place: Place, ctx: &Ctx, now: f64) -> gtk::Widget {
     pin.connect_clicked(move |_| act(client::set_pinned(id, !pinned)));
     hover.append(&pin);
     let remove = match place {
+        Place::Popup => {
+            let b = icon_button("window-close-symbolic", "Dismiss");
+            b.connect_clicked(move |_| act(client::popup_ended(id, "dismissed")));
+            b
+        }
         Place::Inbox => {
             let b = icon_button("window-close-symbolic", "Dismiss");
             b.connect_clicked(move |_| act(client::dismiss(vec![id])));
@@ -241,23 +290,25 @@ pub fn card(n: &Note, place: Place, ctx: &Ctx, now: f64) -> gtk::Widget {
     });
     overlay.add_controller(motion);
 
-    // Click: run it, then it's dealt with.
+    // Click: the app's own action, Omarchy's command, or open the app; then it's dealt
+    // with (nyx-notifyd does all of that).
     let click = gtk::GestureClick::new();
-    let (note, hide) = (n.clone(), ctx.hide.clone());
+    let (id, hide) = (n.id, ctx.hide.clone());
     click.connect_released(move |g, _, _, _| {
         if g.current_button() != 1 {
             return;
         }
-        if activate(&note) {
-            if place == Place::Inbox {
-                act(client::dismiss(vec![note.id]));
+        let hide = hide.clone();
+        glib::MainContext::default().spawn_local(async move {
+            match client::activate(id).await {
+                Ok(true) => hide(),
+                Ok(false) => {}
+                Err(e) => eprintln!("nyx-notification-center: {e}"),
             }
-            hide();
-        }
+        });
     });
     row.add_controller(click);
-    let clickable = n.exec_argv.is_some() || has_desktop(&n.app_icon);
-    set_class(&overlay, "clickable", clickable);
+    set_class(&overlay, "clickable", clickable(n));
     overlay.upcast()
 }
 
