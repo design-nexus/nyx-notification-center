@@ -319,6 +319,17 @@ window.nyx-notification-center button.nc-time {
   font-feature-settings: "tnum";
 }
 
+/* Column titles over the app switches, each as wide as a switch. */
+window.nyx-notification-center .nc-apps-head .nc-column {
+  min-width: 48px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+window.nyx-notification-center .nc-apps-head {
+  padding-right: 14px;
+}
+
 window.nyx-notification-center .nc-app-row {
   min-height: 40px;
   padding: 0 8px;

@@ -42,6 +42,12 @@ pub async fn history(q: &Query) -> Result<Vec<Note>, String> {
     get("History", Some((serde_json::to_string(q).unwrap_or_default(),).to_variant())).await
 }
 
+/// "nyx" when Nyx receives notifications and shows the pop-ups, else "omarchy".
+pub async fn mode() -> Result<String, String> {
+    let v = call("Mode", None).await?;
+    v.child_value(0).str().map(str::to_string).ok_or_else(|| "unexpected reply".to_string())
+}
+
 pub async fn apps() -> Result<Vec<App>, String> {
     get("Apps", None).await
 }

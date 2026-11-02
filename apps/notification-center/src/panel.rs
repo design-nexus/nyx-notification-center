@@ -585,21 +585,73 @@ impl Panel {
         card.append(&option("Delete history", "Everything except pinned", &ends));
         b.append(&card);
 
-        // Apps.
+        // Pop-ups: only when Nyx shows them (Omarchy has its own otherwise).
+        let nyx = client::mode().await.as_deref() == Ok("nyx");
+        if nyx {
+            b.append(&section("Pop-ups"));
+            let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            card.add_css_class("nc-settings-card");
+            let text = gtk::Switch::new();
+            text.set_active(!state.borrow().hide_popup_text);
+            {
+                let (state, save) = (state.clone(), save.clone());
+                text.connect_state_set(move |_, on| {
+                    state.borrow_mut().hide_popup_text = !on;
+                    save();
+                    glib::Propagation::Proceed
+                });
+            }
+            card.append(&option("Show text in pop-ups", "Off: only the app and the title", &text));
+            b.append(&card);
+        }
+
+        // Apps: pop-ups (when Nyx shows them) and history, each its own switch.
         let apps = apps.unwrap_or_default();
         if !apps.is_empty() {
-            b.append(&section("Keep in history"));
+            let head = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            let title = section("Apps");
+            title.set_hexpand(true);
+            head.append(&title);
+            for (name, shown) in [("Pop-ups", nyx), ("History", true)] {
+                let l = section(name);
+                l.add_css_class("nc-column");
+                l.set_visible(shown);
+                head.append(&l);
+            }
+            head.add_css_class("nc-apps-head");
+            b.append(&head);
             let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
             card.add_css_class("nc-settings-card");
             for a in apps {
+                let name = card::app_name(&a.app);
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
                 row.add_css_class("nc-app-row");
                 row.append(&card::app_icon(&a.app_icon, "", 20));
-                row.append(&label(&card::app_name(&a.app), "nc-row-title"));
+                row.append(&label(&name, "nc-row-title"));
+                // Pop-ups: off means it arrives quietly, straight into the Inbox.
+                let pop = gtk::Switch::new();
+                pop.set_valign(gtk::Align::Center);
+                pop.set_active(!state.borrow().no_popups.contains(&a.app));
+                pop.set_tooltip_text(Some(&format!("Show pop-ups for {name}")));
+                pop.set_visible(nyx);
+                {
+                    let (state, save, app) = (state.clone(), save.clone(), a.app.clone());
+                    pop.connect_state_set(move |_, on| {
+                        let mut st = state.borrow_mut();
+                        st.no_popups.retain(|x| *x != app);
+                        if !on {
+                            st.no_popups.push(app.clone());
+                        }
+                        drop(st);
+                        save();
+                        glib::Propagation::Proceed
+                    });
+                }
+                row.append(&pop);
                 let s = gtk::Switch::new();
                 s.set_valign(gtk::Align::Center);
                 s.set_active(!a.excluded);
-                s.set_tooltip_text(Some(&format!("Keep {}'s notifications in history", card::app_name(&a.app))));
+                s.set_tooltip_text(Some(&format!("Keep {name}'s notifications in history")));
                 let (state, save, app) = (state.clone(), save.clone(), a.app.clone());
                 s.connect_state_set(move |_, on| {
                     let mut st = state.borrow_mut();
