@@ -1,0 +1,14 @@
+[Unit]
+Description=Nyx notification service (keeps every notification in Nyx's history)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=io.github.design_nexus.nyx.Notifications
+ExecStart=%h/.local/bin/nyx-notifyd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 gtk = { version = "0.11", package = "gtk4", features = ["v4_18"] }
+gio-unix = "0.22"
 gtk4-layer-shell = "0.8"
 nyx-desktop = { git = "https://github.com/design-nexus/nyx-core.git", rev = "44d4d4c8009259b4ea7d7d0f564319ea9a1ce684" }
 nyx-notify-store = { path = "../../crates/nyx-notify-store" }

@@ -1,0 +1,19 @@
+{
+  "application": "notification-center",
+  "directory": "notification-center",
+  "packages": [
+    "nyx-notification-center",
+    "nyx-notifyd"
+  ],
+  "manifest": "Cargo.toml",
+  "prepare": [],
+  "binaries": [],
+  "test_commands": [
+    [
+      "cargo",
+      "test",
+      "--locked",
+      "--workspace"
+    ]
+  ]
+}

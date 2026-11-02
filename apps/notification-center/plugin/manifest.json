@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "design-nexus.notification-center",
+  "name": "Notification Center button",
+  "version": "0.1.0",
+  "author": "Ken",
+  "license": "MIT",
+  "description": "Opens and closes the Nyx Notification Center; shows unread notifications and Do not disturb.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Notification Center",
+    "description": "Click opens or closes the Nyx Notification Center; right-click switches Do not disturb.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

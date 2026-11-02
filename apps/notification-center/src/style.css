@@ -1,0 +1,339 @@
+/* Nyx Notification Center. Colours are the shared @theme_* tokens; radii follow
+ * STYLE.md (7 / 11 / 15). Layout from the approved mockup: a 400 px panel, full height,
+ * flush with the right edge, rounded at the top left — the Control Center's twin. */
+
+window.nyx-notification-center,
+window.nc-catcher {
+  /* Not quite transparent: some compositors pass clicks through fully clear pixels. */
+  background: rgba(0, 0, 0, 0.004);
+}
+
+window.nyx-notification-center .nc-panel {
+  background: @theme_popover;
+  border-left: 1px solid @theme_border;
+  border-top: 1px solid @theme_border;
+  border-radius: 15px 0 0 0;
+  padding: 14px 14px 16px;
+  font-family: "Inter", sans-serif;
+  color: @theme_text;
+}
+
+/* ---------- Header ---------- */
+
+window.nyx-notification-center .nc-header {
+  min-height: 32px;
+}
+
+window.nyx-notification-center button.nc-icon-button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 7px;
+  background: none;
+  box-shadow: none;
+  color: @theme_dim_text;
+  transition: background 120ms ease-out, color 120ms ease-out;
+}
+
+window.nyx-notification-center button.nc-icon-button:hover {
+  background: alpha(@theme_text, 0.07);
+  color: @theme_text;
+}
+
+window.nyx-notification-center button.nc-icon-button.on {
+  color: @theme_accent;
+}
+
+window.nyx-notification-center button.nc-icon-button.danger {
+  color: @theme_error;
+}
+
+window.nyx-notification-center .nc-segmented {
+  padding: 2px;
+  border-radius: 7px;
+  background: alpha(@theme_text, 0.035);
+}
+
+window.nyx-notification-center .nc-segmented button {
+  min-height: 26px;
+  min-width: 36px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: none;
+  box-shadow: none;
+  color: @theme_dim_text;
+  font-size: 12px;
+}
+
+window.nyx-notification-center .nc-segmented button:checked {
+  background: @theme_raised;
+  color: @theme_text;
+  box-shadow: 0 1px 3px alpha(black, 0.3);
+}
+
+/* ---------- Lists ---------- */
+
+window.nyx-notification-center scrolledwindow {
+  background: none;
+}
+
+window.nyx-notification-center .nc-list {
+  padding-bottom: 4px;
+}
+
+window.nyx-notification-center .nc-section {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: @theme_text_tertiary;
+  padding: 6px 4px 0;
+}
+
+window.nyx-notification-center .nc-section-row button.nc-icon-button {
+  min-width: 24px;
+  min-height: 24px;
+}
+
+window.nyx-notification-center .nc-empty {
+  color: @theme_text_tertiary;
+  font-size: 12.5px;
+  padding: 60px 20px;
+}
+
+/* ---------- Cards ---------- */
+
+window.nyx-notification-center .nc-card {
+  background: @theme_card;
+  border-radius: 11px;
+  padding: 10px 12px 11px;
+  transition: background 120ms ease-out;
+}
+
+window.nyx-notification-center .nc-card.hover {
+  background: mix(@theme_card, @theme_text, 0.04);
+}
+
+window.nyx-notification-center .nc-glyph {
+  border-radius: 8px;
+  background: alpha(@theme_text, 0.1);
+  color: @theme_text;
+  font-family: "JetBrainsMono Nerd Font", "Symbols Nerd Font", sans-serif;
+}
+
+window.nyx-notification-center .nc-top {
+  font-size: 11.5px;
+  color: @theme_dim_text;
+}
+
+window.nyx-notification-center .nc-app {
+  font-weight: 500;
+}
+
+window.nyx-notification-center .nc-when {
+  font-feature-settings: "tnum";
+}
+
+window.nyx-notification-center .nc-pinmark {
+  color: @theme_accent;
+}
+
+window.nyx-notification-center .nc-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 1px;
+}
+
+window.nyx-notification-center .nc-text {
+  font-size: 12.5px;
+  color: @theme_dim_text;
+}
+
+window.nyx-notification-center .nc-dot {
+  min-width: 7px;
+  min-height: 7px;
+  border-radius: 999px;
+  background: @theme_accent;
+}
+
+window.nyx-notification-center .nc-actions {
+  margin-top: 8px;
+}
+
+window.nyx-notification-center button.nc-action {
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 7px;
+  background: alpha(@theme_text, 0.08);
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+window.nyx-notification-center button.nc-action:hover {
+  background: alpha(@theme_text, 0.13);
+}
+
+window.nyx-notification-center .nc-hover {
+  margin: 6px 6px 0 0;
+  border-radius: 7px;
+  background: @theme_card;
+}
+
+window.nyx-notification-center .nc-hover button.nc-icon-button {
+  min-width: 24px;
+  min-height: 24px;
+}
+
+/* A folded group: the newest card with two edges under it, and a count. */
+window.nyx-notification-center .nc-stack .nc-edge1 {
+  min-height: 6px;
+  margin: 0 10px;
+  border-radius: 0 0 11px 11px;
+  background: mix(@theme_card, @theme_text, 0.09);
+}
+
+window.nyx-notification-center .nc-stack .nc-edge2 {
+  min-height: 6px;
+  margin: 0 22px;
+  border-radius: 0 0 11px 11px;
+  background: mix(@theme_card, @theme_text, 0.06);
+}
+
+window.nyx-notification-center .nc-count {
+  margin: 0 12px 10px 0;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 11px;
+  color: @theme_dim_text;
+  background: alpha(@theme_text, 0.1);
+}
+
+window.nyx-notification-center .nc-group-head {
+  padding: 2px 4px;
+}
+
+window.nyx-notification-center .nc-group-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+window.nyx-notification-center .nc-group-head button.nc-icon-button {
+  min-width: 24px;
+  min-height: 24px;
+}
+
+/* ---------- History ---------- */
+
+window.nyx-notification-center entry.nc-search,
+window.nyx-notification-center searchentry.nc-search {
+  min-height: 34px;
+  border-radius: 7px;
+}
+
+window.nyx-notification-center button.nc-choice {
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 13px;
+  font-size: 12px;
+  background: @theme_card;
+  box-shadow: none;
+  color: @theme_dim_text;
+}
+
+window.nyx-notification-center button.nc-choice label {
+  font-size: 12px;
+}
+
+window.nyx-notification-center button.nc-choice:hover {
+  color: @theme_text;
+}
+
+popover.nc-popover > contents {
+  background: @theme_popover;
+  border: 1px solid @theme_border;
+  border-radius: 11px;
+  padding: 4px;
+  box-shadow: 0 16px 40px alpha(black, 0.5);
+}
+
+popover.nc-popover list {
+  background: none;
+}
+
+popover.nc-popover row {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 7px;
+}
+
+popover.nc-popover .nc-choice-item {
+  font-size: 12.5px;
+}
+
+/* ---------- Settings ---------- */
+
+window.nyx-notification-center .nc-detail-head {
+  min-height: 40px;
+  margin-bottom: 10px;
+}
+
+window.nyx-notification-center .nc-detail-title {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+window.nyx-notification-center .nc-settings .nc-section {
+  padding: 14px 8px 6px;
+}
+
+window.nyx-notification-center .nc-settings-card {
+  background: @theme_card;
+  border-radius: 11px;
+  padding: 6px;
+}
+
+window.nyx-notification-center .nc-option {
+  padding: 8px;
+}
+
+window.nyx-notification-center .nc-row-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+window.nyx-notification-center .nc-row-sub {
+  font-size: 12px;
+  color: @theme_dim_text;
+}
+
+window.nyx-notification-center .nc-times {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: @theme_dim_text;
+}
+
+window.nyx-notification-center button.nc-time {
+  border-radius: 7px;
+  background: alpha(@theme_text, 0.06);
+  color: @theme_text;
+  font-feature-settings: "tnum";
+}
+
+window.nyx-notification-center .nc-app-row {
+  min-height: 40px;
+  padding: 0 8px;
+}
+
+window.nyx-notification-center switch {
+  min-width: 36px;
+  min-height: 20px;
+  border-radius: 999px;
+}
+
+window.nyx-notification-center switch:checked {
+  background: @theme_accent;
+}
+
+tooltip {
+  border-radius: 7px;
+}

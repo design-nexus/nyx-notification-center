@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=io.github.design_nexus.nyx.Notifications
+Exec=/bin/false
+SystemdService=nyx-notifyd.service

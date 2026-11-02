@@ -42,6 +42,9 @@ impl Service {
 
     async fn changed_if(&self, changed: bool, e: &SignalEmitter<'_>) -> fdo::Result<bool> {
         if changed {
+            if let Ok(s) = self.store.lock() {
+                publish(&s);
+            }
             let _ = Self::changed(e).await;
         }
         Ok(changed)
@@ -79,6 +82,9 @@ impl Service {
     async fn set_settings(&self, settings: &str, #[zbus(signal_emitter)] e: SignalEmitter<'_>) -> fdo::Result<String> {
         let parsed: Settings = serde_json::from_str(settings).map_err(err)?;
         let saved = self.with(|s| s.set_settings(parsed))?;
+        if let Ok(s) = self.store.lock() {
+            publish(&s);
+        }
         let _ = self.settings_changed.send(());
         let _ = Self::changed(&e).await;
         json(&saved)
@@ -127,6 +133,27 @@ impl Service {
     async fn changed(e: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
+/// What the bar button shows, in a small file it watches: `{"unread": n, "inbox": n}`
+/// in `$XDG_STATE_HOME/nyx/notifications.json`.
+fn publish(store: &Store) {
+    let Ok(inbox) = store.inbox() else { return };
+    let unread = inbox.iter().filter(|n| !n.read).count();
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state"))
+        .join("nyx");
+    let _ = std::fs::create_dir_all(&state);
+    let text = format!("{{\"unread\": {unread}, \"inbox\": {}}}\n", inbox.len());
+    let path = state.join("notifications.json");
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {
+        return;
+    }
+    let tmp = state.join(".notifications.json.tmp");
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
 fn ingest(store: &Shared, dir: &Path) -> bool {
     let (live, history) = omarchy::read(dir);
     match store.lock() {
@@ -138,7 +165,10 @@ fn ingest(store: &Shared, dir: &Path) -> bool {
     }
 }
 
-fn announce(conn: &zbus::blocking::Connection) {
+fn announce(store: &Shared, conn: &zbus::blocking::Connection) {
+    if let Ok(s) = store.lock() {
+        publish(&s);
+    }
     if let Ok(iface) = conn.object_server().interface::<_, Service>(PATH) {
         let _ = zbus::block_on(Service::changed(iface.signal_emitter()));
     }
@@ -155,7 +185,7 @@ fn watch(store: Shared, conn: zbus::blocking::Connection, dir: PathBuf) {
             continue;
         }
         if ingest(&store, &dir) {
-            announce(&conn);
+            announce(&store, &conn);
         }
         let mut buf = [0u8; 4096];
         'events: loop {
@@ -174,7 +204,7 @@ fn watch(store: Shared, conn: zbus::blocking::Connection, dir: PathBuf) {
             std::thread::sleep(Duration::from_millis(150));
             while ino.read_events(&mut buf).is_ok_and(|mut e| e.next().is_some()) {}
             if ingest(&store, &dir) {
-                announce(&conn);
+                announce(&store, &conn);
             }
         }
         // The folder went away (or the watch failed): start over.
@@ -224,7 +254,7 @@ fn schedule(store: Shared, conn: zbus::blocking::Connection, dir: PathBuf, wake:
         if now() - last_prune > 3600.0 {
             last_prune = now();
             if store.lock().map(|mut s| s.prune(now()).unwrap_or(false)).unwrap_or(false) {
-                announce(&conn);
+                announce(&store, &conn);
             }
         }
         // Next minute boundary while a schedule is on; otherwise just the hourly prune.
@@ -245,6 +275,9 @@ fn main() -> std::process::ExitCode {
         }
     };
     let dir = omarchy::dir();
+    if let Ok(s) = store.lock() {
+        publish(&s);
+    }
     let (tx, rx) = mpsc::channel();
     let conn = match zbus::blocking::connection::Builder::session()
         .and_then(|b| b.name(BUS))
