@@ -12,6 +12,7 @@
 //! Stage A fills it from Omarchy's notification files ([`omarchy`]); a deleted row
 //! leaves a short-lived marker so the next read of those files doesn't bring it back.
 
+pub mod detect;
 pub mod omarchy;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -53,6 +54,30 @@ pub struct Note {
     pub read: bool,
     pub dismissed: bool,
     pub pinned: bool,
+    /// The app's own buttons (stage B: they work while the notification is open).
+    pub app_actions: Vec<AppAction>,
+    /// The app's desktop id, when it said (the `desktop-entry` hint).
+    pub desktop_entry: String,
+    /// A picture sent with it (a local file).
+    pub image: String,
+    /// Verification codes in the text, to copy.
+    pub codes: Vec<String>,
+    /// The id the sending app knows it by, while it's open (stage B).
+    pub live_id: Option<u32>,
+}
+
+impl Note {
+    /// Still open: the sender can be told about clicks and buttons.
+    pub fn open(&self) -> bool {
+        self.closed_reason.is_none()
+    }
+}
+
+/// A button the app put on its notification: `key` goes back to the app when clicked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppAction {
+    pub key: String,
+    pub label: String,
 }
 
 /// Do not disturb by the clock: quiet from `from` to `to`, minutes after midnight (it
@@ -89,11 +114,15 @@ pub struct Settings {
     pub schedule: Schedule,
     /// Apps whose notifications aren't kept (pinned ones excepted).
     pub excluded: Vec<String>,
+    /// Apps whose notifications arrive quietly: kept here, no pop-up (stage B).
+    pub no_popups: Vec<String>,
+    /// Pop-ups show only the app and title, not the text (stage B).
+    pub hide_popup_text: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { retention_days: 30, schedule: Schedule::default(), excluded: Vec::new() }
+        Settings { retention_days: 30, schedule: Schedule::default(), excluded: Vec::new(), no_popups: Vec::new(), hide_popup_text: false }
     }
 }
 
@@ -108,6 +137,8 @@ impl Settings {
         self.schedule.to %= 24 * 60;
         self.excluded.sort();
         self.excluded.dedup();
+        self.no_popups.sort();
+        self.no_popups.dedup();
         self
     }
 }
@@ -153,7 +184,17 @@ CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), json
 ";
 
 const COLUMNS: &str = "id, key, app, app_icon, glyph, summary, body, urgency, exec_argv, exec_actions, ts, closed_ts, \
-                       closed_reason, live, read, dismissed, pinned";
+                       closed_reason, live, read, dismissed, pinned, app_actions, desktop_entry, image, live_id";
+
+/// Columns added after the first release, with their definitions.
+const ADDED: &[(&str, &str)] = &[
+    ("app_actions", "TEXT NOT NULL DEFAULT ''"),
+    ("desktop_entry", "TEXT NOT NULL DEFAULT ''"),
+    ("image", "TEXT NOT NULL DEFAULT ''"),
+    ("live_id", "INTEGER"),
+    ("sender", "TEXT NOT NULL DEFAULT ''"),
+    ("transient", "INTEGER NOT NULL DEFAULT 0"),
+];
 
 fn note(r: &rusqlite::Row) -> Result<Note> {
     let argv: String = r.get(8)?;
@@ -176,12 +217,43 @@ fn note(r: &rusqlite::Row) -> Result<Note> {
         read: r.get(14)?,
         dismissed: r.get(15)?,
         pinned: r.get(16)?,
+        app_actions: serde_json::from_str(&r.get::<_, String>(17)?).unwrap_or_default(),
+        desktop_entry: r.get(18)?,
+        image: r.get(19)?,
+        codes: Vec::new(),
+        live_id: r.get::<_, Option<i64>>(20)?.map(|v| v as u32),
+    })
+    .map(|mut n| {
+        n.codes = detect::codes(&n.summary, &n.body);
+        n
     })
 }
 
 /// A closing that means it was dealt with: clicked, closed by you, or withdrawn by its app.
 fn handled(reason: Option<&str>) -> bool {
     matches!(reason, Some("dismissed" | "activated" | "closed"))
+}
+
+/// A notification arriving over D-Bus (stage B).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Incoming {
+    pub app: String,
+    pub app_icon: String,
+    pub desktop_entry: String,
+    pub image: String,
+    pub glyph: String,
+    pub summary: String,
+    pub body: String,
+    pub urgency: i64,
+    /// JSON array of strings (Omarchy's `omarchy-exec-argv` hint).
+    pub exec_argv: String,
+    /// JSON array of `{label, argv}` (Omarchy's `omarchy-actions` hint).
+    pub exec_actions: String,
+    pub app_actions: Vec<AppAction>,
+    /// The sender's bus name.
+    pub sender: String,
+    /// Not worth keeping (the `transient` hint): no Inbox.
+    pub transient: bool,
 }
 
 /// What a search looks for.
@@ -219,6 +291,17 @@ impl Store {
         db.pragma_update(None, "journal_mode", "WAL")?;
         db.busy_timeout(std::time::Duration::from_secs(2))?;
         db.execute_batch(SCHEMA)?;
+        let have: Vec<String> =
+            db.prepare("SELECT name FROM pragma_table_info('notifications')")?.query_map([], |r| r.get(0))?.collect::<Result<_>>()?;
+        for (col, def) in ADDED {
+            if !have.iter().any(|h| h == col) {
+                db.execute_batch(&format!("ALTER TABLE notifications ADD COLUMN {col} {def}"))?;
+            }
+        }
+        db.execute_batch(
+            "CREATE INDEX IF NOT EXISTS notifications_live ON notifications(live_id) WHERE closed_reason IS NULL;
+             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )?;
         Ok(Store { db })
     }
 
@@ -470,6 +553,159 @@ impl Store {
         Ok(n > 0)
     }
 
+    pub fn meta(&self, key: &str) -> Option<String> {
+        self.db.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).ok()
+    }
+
+    pub fn set_meta(&mut self, key: &str, value: &str) -> Result<()> {
+        self.db.execute("INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2", [key, value])?;
+        Ok(())
+    }
+
+    /// The next notification id to hand out (never 0; carries on across restarts).
+    pub fn next_live_id(&mut self) -> Result<u32> {
+        let last: u32 = self.meta("last_live_id").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let mut id = if last >= u32::MAX - 1 { 1 } else { last + 1 };
+        // Skip ids still open (after a wrap-around).
+        while self.open_live(id)?.is_some() {
+            id = if id >= u32::MAX - 1 { 1 } else { id + 1 };
+        }
+        self.set_meta("last_live_id", &id.to_string())?;
+        Ok(id)
+    }
+
+    /// The open notification an app knows as `live_id`.
+    pub fn open_live(&self, live_id: u32) -> Result<Option<i64>> {
+        self.db
+            .query_row("SELECT id FROM notifications WHERE live_id = ?1 AND closed_reason IS NULL", [live_id], |r| r.get(0))
+            .optional()
+    }
+
+    /// Every notification still open (stage B), oldest first.
+    pub fn open_notes(&self) -> Result<Vec<Note>> {
+        self.select("closed_reason IS NULL AND live_id IS NOT NULL", "ts", &[])
+    }
+
+    /// A notification arriving (stage B). With the id of one still open, it replaces
+    /// that one in place and is unread again.
+    pub fn notify(&mut self, live_id: u32, n: &Incoming, now: f64) -> Result<Note> {
+        let quiet = n.transient || n.app == "omarchy-action" || n.app == "notify-send";
+        let actions = serde_json::to_string(&n.app_actions).unwrap_or_default();
+        let id = match self.open_live(live_id)? {
+            Some(id) => {
+                self.db.execute(
+                    "UPDATE notifications SET app = ?2, app_icon = ?3, glyph = ?4, summary = ?5, body = ?6, urgency = ?7, \
+                     exec_argv = ?8, exec_actions = ?9, app_actions = ?10, desktop_entry = ?11, image = ?12, sender = ?13, \
+                     transient = ?14, ts = ?15, live = 1, read = ?16, dismissed = ?16 WHERE id = ?1",
+                    params![
+                        id,
+                        n.app,
+                        n.app_icon,
+                        n.glyph,
+                        n.summary,
+                        n.body,
+                        n.urgency,
+                        n.exec_argv,
+                        n.exec_actions,
+                        actions,
+                        n.desktop_entry,
+                        n.image,
+                        n.sender,
+                        n.transient,
+                        now,
+                        quiet
+                    ],
+                )?;
+                id
+            }
+            None => {
+                let next: i64 = self.db.query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM notifications", [], |r| r.get(0))?;
+                let key = format!("n{live_id}-{}-{next}", (now * 1000.0) as i64);
+                self.db.execute(
+                    "INSERT INTO notifications (key, app, app_icon, glyph, summary, body, urgency, exec_argv, exec_actions, \
+                     app_actions, desktop_entry, image, sender, transient, ts, live, read, dismissed, live_id) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1, ?16, ?16, ?17)",
+                    params![
+                        key,
+                        n.app,
+                        n.app_icon,
+                        n.glyph,
+                        n.summary,
+                        n.body,
+                        n.urgency,
+                        n.exec_argv,
+                        n.exec_actions,
+                        actions,
+                        n.desktop_entry,
+                        n.image,
+                        n.sender,
+                        n.transient,
+                        now,
+                        quiet,
+                        live_id
+                    ],
+                )?;
+                self.db.last_insert_rowid()
+            }
+        };
+        Ok(self.get(id)?.expect("just written"))
+    }
+
+    /// Its pop-up has gone; it stays open in the Inbox.
+    pub fn popup_over(&mut self, live_id: u32) -> Result<bool> {
+        Ok(self.db.execute("UPDATE notifications SET live = 0 WHERE live_id = ?1 AND closed_reason IS NULL AND live = 1", [live_id])? > 0)
+    }
+
+    /// Close notifications that are still open, recording why (`expired`, `dismissed`,
+    /// `activated`, `closed`). Returns the ids their apps know them by, to tell them.
+    /// An app left out of history leaves nothing behind once closed.
+    pub fn close(&mut self, ids: &[i64], reason: &str, now: f64) -> Result<Vec<u32>> {
+        let excluded = self.settings().excluded;
+        let tx = self.db.transaction()?;
+        let mut closed = Vec::new();
+        for id in ids {
+            let row: Option<(Option<i64>, String, bool)> = tx
+                .query_row(
+                    "SELECT live_id, app, transient FROM notifications WHERE id = ?1 AND closed_reason IS NULL",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
+            let Some((live_id, app, transient)) = row else { continue };
+            if excluded.contains(&app) {
+                tx.execute("DELETE FROM notifications WHERE id = ?1 AND pinned = 0", [id])?;
+            }
+            tx.execute(
+                "UPDATE notifications SET closed_reason = ?2, closed_ts = ?3, live = 0, \
+                 dismissed = MAX(dismissed, ?4), read = MAX(read, ?4) WHERE id = ?1",
+                params![id, reason, now, handled(Some(reason)) || transient],
+            )?;
+            if let Some(l) = live_id {
+                closed.push(l as u32);
+            }
+        }
+        tx.commit()?;
+        Ok(closed)
+    }
+
+    /// Close the one an app knows as `live_id`. Returns its row id.
+    pub fn close_live(&mut self, live_id: u32, reason: &str, now: f64) -> Result<Option<i64>> {
+        let Some(id) = self.open_live(live_id)? else { return Ok(None) };
+        self.close(&[id], reason, now)?;
+        Ok(Some(id))
+    }
+
+    /// The open ones among `ids` (to tell their apps they're gone).
+    pub fn open_among(&self, ids: &[i64]) -> Result<Vec<i64>> {
+        let mut out = Vec::new();
+        for id in ids {
+            if self.db.query_row("SELECT 1 FROM notifications WHERE id = ?1 AND closed_reason IS NULL", [id], |_| Ok(())).optional()?.is_some() {
+                out.push(*id);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn get(&self, id: i64) -> Result<Option<Note>> {
         Ok(self.select("id = ?1", "id", &[&id])?.into_iter().next())
     }
@@ -672,6 +908,7 @@ mod tests {
                 retention_days: 12,
                 schedule: Schedule { enabled: true, from: 1500, to: 420 },
                 excluded: vec!["B".into(), "A".into(), "B".into()],
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(saved.retention_days, 30);
@@ -688,6 +925,93 @@ mod tests {
         let day = Schedule { enabled: true, from: 9 * 60, to: 17 * 60 };
         assert!(day.quiet_at(9 * 60) && !day.quiet_at(17 * 60) && !day.quiet_at(8 * 60));
         assert!(!Schedule { enabled: false, ..day }.quiet_at(10 * 60));
+    }
+
+    fn incoming(app: &str, summary: &str) -> Incoming {
+        Incoming {
+            app: app.into(),
+            summary: summary.into(),
+            urgency: 1,
+            app_actions: vec![AppAction { key: "default".into(), label: "Open".into() }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn stage_b_notify_replace_close() {
+        let mut s = Store::memory().unwrap();
+        let t = now();
+        let a = s.next_live_id().unwrap();
+        let b = s.next_live_id().unwrap();
+        assert!(a >= 1 && b == a + 1);
+        let n = s.notify(a, &incoming("Chat", "Hi"), t).unwrap();
+        assert!(n.open() && n.live && !n.read && n.live_id == Some(a));
+        assert_eq!(n.app_actions[0].key, "default");
+        // Replaced in place.
+        s.mark_all_read().unwrap();
+        let n2 = s.notify(a, &incoming("Chat", "Hi again"), t + 1.0).unwrap();
+        assert_eq!(n2.id, n.id);
+        assert!(!n2.read && n2.summary == "Hi again");
+        // The pop-up goes; it stays open in the Inbox.
+        assert!(s.popup_over(a).unwrap());
+        let n3 = s.get(n.id).unwrap().unwrap();
+        assert!(n3.open() && !n3.live && !n3.dismissed);
+        assert_eq!(s.open_notes().unwrap().len(), 1);
+        // The app withdraws it: closed, out of the Inbox, still in history.
+        assert_eq!(s.close_live(a, "closed", t).unwrap(), Some(n.id));
+        assert!(s.inbox().unwrap().is_empty());
+        assert_eq!(s.history(&Query::default(), t).unwrap().len(), 1);
+        assert!(s.open_live(a).unwrap().is_none());
+        // The id is free again: a new notification gets a new row.
+        let m = s.notify(a, &incoming("Chat", "New"), t).unwrap();
+        assert_ne!(m.id, n.id);
+    }
+
+    #[test]
+    fn stage_b_closing_tells_which_ids() {
+        let mut s = Store::memory().unwrap();
+        let t = now();
+        let ids: Vec<i64> = (0..3)
+            .map(|i| {
+                let l = s.next_live_id().unwrap();
+                s.notify(l, &incoming("Mail", &format!("m{i}")), t).unwrap().id
+            })
+            .collect();
+        s.close(&ids[..1], "dismissed", t).unwrap();
+        assert_eq!(s.open_among(&ids).unwrap(), ids[1..].to_vec());
+        let told = s.close(&ids, "dismissed", t).unwrap();
+        assert_eq!(told.len(), 2, "only the open ones");
+        assert!(s.inbox().unwrap().is_empty());
+    }
+
+    #[test]
+    fn stage_b_quiet_senders_and_left_out_apps() {
+        let mut s = Store::memory().unwrap();
+        let t = now();
+        let mut tr = incoming("Files", "Copied");
+        tr.transient = true;
+        let l = s.next_live_id().unwrap();
+        s.notify(l, &tr, t).unwrap();
+        let l2 = s.next_live_id().unwrap();
+        s.notify(l2, &incoming("omarchy-action", "Layout: Scrolling"), t).unwrap();
+        assert!(s.inbox().unwrap().is_empty(), "transient and Omarchy's passing messages skip the Inbox");
+        let mut set = s.settings();
+        set.excluded.push("Passwords".into());
+        s.set_settings(set).unwrap();
+        let l3 = s.next_live_id().unwrap();
+        let p = s.notify(l3, &incoming("Passwords", "Vault unlocked"), t).unwrap();
+        assert!(s.get(p.id).unwrap().is_some(), "kept while open, for its buttons");
+        s.close_live(l3, "expired", t).unwrap();
+        assert!(s.get(p.id).unwrap().is_none(), "gone once closed");
+    }
+
+    #[test]
+    fn codes_come_with_the_note() {
+        let mut s = Store::memory().unwrap();
+        let l = s.next_live_id().unwrap();
+        let mut n = incoming("Bank", "Your verification code");
+        n.body = "482 913 expires soon".into();
+        assert_eq!(s.notify(l, &n, now()).unwrap().codes, vec!["482913"]);
     }
 
     #[test]
