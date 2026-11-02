@@ -1,0 +1,13 @@
+[workspace]
+resolver = "3"
+members = ["apps/notification-center", "apps/notifyd", "crates/nyx-notify-store"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+authors = ["Ken Smith"]
+repository = "https://github.com/design-nexus/nyx-notification-center"
+
+[profile.release]
+lto = "thin"
+strip = true

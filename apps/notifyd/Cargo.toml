@@ -1,0 +1,16 @@
+[package]
+name = "nyx-notifyd"
+version = "0.1.0"
+description = "Nyx notification service: keeps every notification in Nyx's history"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+inotify = "0.11"
+libc = "0.2"
+nyx-notify-store = { path = "../../crates/nyx-notify-store" }
+serde = "1"
+serde_json = "1"
+zbus = "5"
