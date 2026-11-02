@@ -76,9 +76,12 @@ fn mode() -> Option<String> {
 }
 
 pub fn status() -> ExitCode {
+    use std::io::Write;
     let mode = mode();
-    println!("Pop-ups: {}", if mode.as_deref() == Some("nyx") { "Nyx Notification Center" } else { "Omarchy" });
-    println!("Notification server: {}", server().unwrap_or_else(|| "none".into()));
+    // A reader that stops early (`| grep -q`) is fine: ignore the closed pipe.
+    let mut out = std::io::stdout();
+    let _ = writeln!(out, "Pop-ups: {}", if mode.as_deref() == Some("nyx") { "Nyx Notification Center" } else { "Omarchy" });
+    let _ = writeln!(out, "Notification server: {}", server().unwrap_or_else(|| "none".into()));
     ExitCode::SUCCESS
 }
 
