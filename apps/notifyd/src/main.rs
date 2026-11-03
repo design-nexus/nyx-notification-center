@@ -115,8 +115,13 @@ fn schedule(st: Arc<State>, wake: mpsc::Receiver<()>) {
             }
             image::prune(settings.retention_days);
         }
+        // Codes in history are masked once they're surely used or expired.
+        if st.store.lock().map(|mut s| s.mask_codes(now() - 600.0).unwrap_or(false)).unwrap_or(false) {
+            announce(&st);
+        }
         // Next minute boundary while a schedule is on; otherwise just the hourly prune.
         let wait = if settings.schedule.enabled { 60 - sec.min(59) } else { 3600 };
+        let wait = if settings.keep_codes { wait } else { wait.min(300) };
         if let Ok(()) = wake.recv_timeout(Duration::from_secs(wait)) {
             last = None;
         }
@@ -176,6 +181,7 @@ fn main() -> std::process::ExitCode {
         settings_changed: Mutex::new(tx),
         generation: Mutex::default(),
         conn: OnceLock::new(),
+        offered: Mutex::new(now()),
     });
     let built = zbus::blocking::connection::Builder::session()
         .and_then(|b| b.serve_at(state::PATH, service::Service { state: st.clone() }))

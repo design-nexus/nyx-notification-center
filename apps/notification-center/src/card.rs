@@ -5,7 +5,7 @@
 use crate::client;
 use crate::ui::{self, act, icon, icon_button, label, set_class};
 use gtk::prelude::*;
-use gtk::{gdk, glib};
+use gtk::{gdk, gio, glib};
 use nyx_notify_store::Note;
 use std::rc::Rc;
 
@@ -128,6 +128,33 @@ fn copy(text: &str) {
     }
 }
 
+/// A code goes through Nyx Clipboard when it's there: marked sensitive (kept out of
+/// clipboard histories) and cleared again after a little while. Otherwise a plain copy.
+fn copy_code(code: &str) {
+    let code = code.to_string();
+    glib::spawn_future_local(async move {
+        let sent = match gio::bus_get_future(gio::BusType::Session).await {
+            Ok(bus) => bus
+                .call_future(
+                    Some("io.github.design_nexus.nyx.Clipboard1"),
+                    "/io/github/design_nexus/nyx/Clipboard1",
+                    "io.github.design_nexus.nyx.Clipboard.Otp1",
+                    "CopyCode",
+                    Some(&(code.as_str(),).to_variant()),
+                    None,
+                    gio::DBusCallFlags::NO_AUTO_START,
+                    3000,
+                )
+                .await
+                .is_ok(),
+            Err(_) => false,
+        };
+        if !sent {
+            copy(&code);
+        }
+    });
+}
+
 pub fn card(n: &Note, place: Place, ctx: &Ctx, now: f64) -> gtk::Widget {
     let overlay = gtk::Overlay::new();
     overlay.add_css_class("nc-card");
@@ -210,7 +237,7 @@ pub fn card(n: &Note, place: Place, ctx: &Ctx, now: f64) -> gtk::Widget {
             b.set_tooltip_text(Some("Copy the code"));
             let code = code.clone();
             b.connect_clicked(move |b| {
-                copy(&code);
+                copy_code(&code);
                 b.set_tooltip_text(Some("Copied"));
             });
             acts.append(&b);

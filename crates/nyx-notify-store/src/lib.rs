@@ -121,6 +121,8 @@ pub struct Settings {
     pub no_popups: Vec<String>,
     /// Pop-ups show only the app and title, not the text (stage B).
     pub hide_popup_text: bool,
+    /// Keep verification codes in history; off, they're masked once ten minutes old.
+    pub keep_codes: bool,
 }
 
 impl Default for Settings {
@@ -131,6 +133,7 @@ impl Default for Settings {
             excluded: Vec::new(),
             no_popups: Vec::new(),
             hide_popup_text: false,
+            keep_codes: false,
         }
     }
 }
@@ -237,6 +240,12 @@ fn note(r: &rusqlite::Row) -> Result<Note> {
         n.codes = detect::codes(&n.summary, &n.body);
         n
     })
+}
+
+/// Whether the stored `summary` and `body` are `row`'s with their codes masked.
+fn masked_copy(summary: &str, body: &str, row: &omarchy::Row) -> bool {
+    let codes = detect::codes(&row.summary, &row.body);
+    !codes.is_empty() && summary == detect::mask(&row.summary, &codes) && body == detect::mask(&row.body, &codes)
 }
 
 /// A closing that means it was dealt with: clicked, closed by you, or withdrawn by its app.
@@ -373,8 +382,9 @@ impl Store {
                     insert(&tx, row, true)?;
                     changed = true;
                 }
-                // Replaced in place (same notification, new text): unread again.
-                Some((s, b)) if s != row.summary || b != row.body => {
+                // Replaced in place (same notification, new text): unread again. A copy
+                // whose codes were masked here is the same text.
+                Some((s, b)) if (s != row.summary || b != row.body) && !masked_copy(&s, &b, row) => {
                     tx.execute(
                         "UPDATE notifications SET summary = ?2, body = ?3, app_icon = ?4, glyph = ?5, urgency = ?6, \
                          exec_argv = ?7, exec_actions = ?8, ts = ?9, live = 1, read = 0 WHERE key = ?1",
@@ -430,6 +440,26 @@ impl Store {
             changed = true;
         }
         tx.commit()?;
+        Ok(changed)
+    }
+
+    /// Notifications that arrived after `ts`, oldest first.
+    pub fn since(&self, ts: f64) -> Result<Vec<Note>> {
+        self.select("ts > ?1", "ts", &[&ts])
+    }
+
+    /// Mask verification codes in notifications older than `before` (unless the settings
+    /// keep them). Returns whether any changed.
+    pub fn mask_codes(&mut self, before: f64) -> Result<bool> {
+        if self.settings().keep_codes {
+            return Ok(false);
+        }
+        let notes = self.select("ts < ?1 AND ts > ?2", "ts", &[&before, &(before - 7.0 * 86_400.0)])?;
+        let mut changed = false;
+        for n in notes.iter().filter(|n| !n.codes.is_empty()) {
+            let (s, b) = (detect::mask(&n.summary, &n.codes), detect::mask(&n.body, &n.codes));
+            changed |= self.db.execute("UPDATE notifications SET summary = ?2, body = ?3 WHERE id = ?1", params![n.id, s, b])? > 0;
+        }
         Ok(changed)
     }
 
@@ -1034,6 +1064,29 @@ mod tests {
         let mut n = incoming("Bank", "Your verification code");
         n.body = "482 913 expires soon".into();
         assert_eq!(s.notify(l, &n, now()).unwrap().codes, vec!["482913"]);
+    }
+
+    #[test]
+    fn codes_are_masked_once_old_unless_kept() {
+        let mut s = Store::memory().unwrap();
+        let l = s.next_live_id().unwrap();
+        let mut n = incoming("Bank", "Your verification code");
+        n.body = "482 913 expires soon".into();
+        let t = now();
+        let id = s.notify(l, &n, t).unwrap().id;
+        assert!(!s.mask_codes(t - 1.0).unwrap(), "a fresh code stays");
+        assert!(s.mask_codes(t + 1.0).unwrap());
+        let note = s.get(id).unwrap().unwrap();
+        assert_eq!(note.body, "•••••• expires soon");
+        assert!(note.codes.is_empty());
+        assert_eq!(s.since(t - 1.0).unwrap().len(), 1);
+        let l2 = s.next_live_id().unwrap();
+        let id2 = s.notify(l2, &n, t).unwrap().id;
+        let mut settings = s.settings();
+        settings.keep_codes = true;
+        s.set_settings(settings).unwrap();
+        assert!(!s.mask_codes(t + 1.0).unwrap());
+        assert_eq!(s.get(id2).unwrap().unwrap().codes, vec!["482913"]);
     }
 
     #[test]

@@ -23,6 +23,8 @@ pub struct State {
     /// Bumped on every arrival, so a replaced notification's old timeout is ignored.
     pub generation: Mutex<HashMap<u32, u64>>,
     pub conn: OnceLock<zbus::Connection>,
+    /// The newest notification handed to Nyx Clipboard for its codes.
+    pub offered: Mutex<f64>,
 }
 
 pub fn err(e: impl std::fmt::Display) -> zfdo::Error {
@@ -83,8 +85,35 @@ async fn emit<B: serde::Serialize + zbus::zvariant::DynamicType>(st: &State, pat
     }
 }
 
+const CLIPBOARD: &str = "io.github.design_nexus.nyx.Clipboard1";
+const CLIPBOARD_PATH: &str = "/io/github/design_nexus/nyx/Clipboard1";
+const CODES: &str = "io.github.design_nexus.nyx.Clipboard.Otp1";
+
+/// Hand new notifications with a verification code to Nyx Clipboard, which keeps the
+/// code in memory for a few minutes (for its popup and Passwords' browser extension).
+/// Apps left out of history are left out here too. Without Clipboard nothing happens.
+fn offer_codes(st: &State) {
+    let (notes, excluded) = {
+        let Ok(s) = st.store.lock() else { return };
+        let Ok(mut since) = st.offered.lock() else { return };
+        let notes = s.since(*since).unwrap_or_default();
+        if let Some(last) = notes.iter().map(|n| n.ts).reduce(f64::max) {
+            *since = since.max(last);
+        }
+        (notes, s.settings().excluded)
+    };
+    let Some(conn) = st.conn().cloned() else { return };
+    for n in notes.into_iter().filter(|n| !n.codes.is_empty() && !excluded.contains(&n.app)) {
+        let conn = conn.clone();
+        std::thread::spawn(move || {
+            let _ = zbus::block_on(conn.call_method(Some(CLIPBOARD), CLIPBOARD_PATH, Some(CODES), "Offer", &(n.summary, n.body, n.app)));
+        });
+    }
+}
+
 /// Something changed: update the bar's file and tell the panel.
 pub async fn changed(st: &State) {
+    offer_codes(st);
     if let Ok(s) = st.store.lock() {
         publish(&s);
     }

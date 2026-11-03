@@ -50,6 +50,20 @@ fn product_name(t: &str, at: usize, word: &str) -> bool {
     PRODUCT_WORD.is_match(w.as_str()) && !CODE_WORDS.is_match(w.as_str())
 }
 
+/// `text` with each of `codes` replaced by dots, however it was spaced ("482 913").
+pub fn mask(text: &str, codes: &[String]) -> String {
+    let mut out = text.to_string();
+    for code in codes {
+        let chars: Vec<String> = code.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| regex::escape(&c.to_string())).collect();
+        if chars.is_empty() {
+            continue;
+        }
+        let Ok(re) = Regex::new(&chars.join(r"[\s-]?")) else { continue };
+        out = re.replace_all(&out, "•".repeat(chars.len()).as_str()).into_owned();
+    }
+    out
+}
+
 /// Codes found in the title and text, at most three, without repeats.
 pub fn codes(summary: &str, body: &str) -> Vec<String> {
     let text = format!("{summary}\n{body}");
@@ -89,6 +103,15 @@ pub fn codes(summary: &str, body: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn masks_codes_however_spaced() {
+        let c = codes("Sign-in", "Your code is 482 913.");
+        assert_eq!(mask("Your code is 482 913.", &c), "Your code is ••••••.");
+        assert!(codes("Sign-in", &mask("Your code is 482 913.", &c)).is_empty());
+        let g = codes("Google", "G-482913 is your Google verification code.");
+        assert_eq!(mask("G-482913 is your Google verification code.", &g), "••••••• is your Google verification code.");
+    }
 
     #[test]
     fn finds_codes_near_their_word() {

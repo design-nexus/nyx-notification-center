@@ -583,6 +583,17 @@ impl Panel {
             });
         }
         card.append(&option("Delete history", "Everything except pinned", &ends));
+        let keep = gtk::Switch::new();
+        keep.set_active(state.borrow().keep_codes);
+        {
+            let (state, save) = (state.clone(), save.clone());
+            keep.connect_state_set(move |_, on| {
+                state.borrow_mut().keep_codes = on;
+                save();
+                glib::Propagation::Proceed
+            });
+        }
+        card.append(&option("Keep verification codes", "Off: codes in history are hidden once ten minutes old", &keep));
         b.append(&card);
 
         // Pop-ups: only when Nyx shows them (Omarchy has its own otherwise).
