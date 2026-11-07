@@ -71,12 +71,18 @@ pub struct Panel {
     me: RefCell<Weak<Panel>>,
     panel1: RefCell<Option<nyx_desktop::panel::Panel>>,
     popups: RefCell<Option<Rc<crate::popups::Popups>>>,
+    /// The lists, as tall as what they hold up to the screen's height (set on opening).
+    scrollers: Vec<gtk::ScrolledWindow>,
 }
+
+/// Room the header, the history filters and the bar take above and around a list.
+const AROUND_LISTS: i32 = 220;
 
 fn scrolled(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     let s = gtk::ScrolledWindow::new();
     s.set_hscrollbar_policy(gtk::PolicyType::Never);
     s.set_vexpand(true);
+    s.set_propagate_natural_height(true);
     s.set_child(Some(child));
     s
 }
@@ -146,6 +152,10 @@ impl Panel {
         if let Some(m) = self.target_monitor() {
             self.window.set_monitor(Some(&m));
             self.catcher.set_monitor(Some(&m));
+            let most = (m.geometry().height() - AROUND_LISTS).max(200);
+            for s in &self.scrollers {
+                s.set_max_content_height(most);
+            }
         }
         self.content.set_visible_child_name("main");
         // Pop-ups make way: everything they showed is in here.
@@ -743,9 +753,12 @@ pub fn build(app: &gtk::Application, only: Option<String>) -> Rc<Panel> {
     } else {
         KeyboardMode::OnDemand
     });
-    for e in [Edge::Top, Edge::Bottom, Edge::Right] {
+    // A card in the corner under the bar, as tall as what it shows.
+    for e in [Edge::Top, Edge::Right] {
         window.set_anchor(e, true);
     }
+    window.set_margin(Edge::Top, 6);
+    window.set_margin(Edge::Right, 6);
     window.set_exclusive_zone(0);
     window.set_default_size(WIDTH, -1);
 
@@ -779,6 +792,8 @@ pub fn build(app: &gtk::Application, only: Option<String>) -> Rc<Panel> {
     content.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
     content.set_transition_duration(200);
     content.set_vexpand(true);
+    content.set_vhomogeneous(false);
+    content.set_interpolate_size(true);
     root.append(&content);
 
     // Main: header, then the views.
@@ -824,14 +839,17 @@ pub fn build(app: &gtk::Application, only: Option<String>) -> Rc<Panel> {
     views.set_transition_type(gtk::StackTransitionType::Crossfade);
     views.set_transition_duration(120);
     views.set_vexpand(true);
+    views.set_vhomogeneous(false);
+    views.set_interpolate_size(true);
     let list = || {
         let b = gtk::Box::new(gtk::Orientation::Vertical, 8);
         b.add_css_class("nc-list");
         b
     };
     let (inbox, pinned, history) = (list(), list(), list());
-    views.add_named(&scrolled(&inbox), Some("inbox"));
-    views.add_named(&scrolled(&pinned), Some("pinned"));
+    let mut scrollers = vec![scrolled(&inbox), scrolled(&pinned), scrolled(&history)];
+    views.add_named(&scrollers[0], Some("inbox"));
+    views.add_named(&scrollers[1], Some("pinned"));
     let hist_page = gtk::Box::new(gtk::Orientation::Vertical, 8);
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Search notifications"));
@@ -845,7 +863,7 @@ pub fn build(app: &gtk::Application, only: Option<String>) -> Rc<Panel> {
     filters.append(&app_filter.button);
     filters.append(&days_filter.button);
     hist_page.append(&filters);
-    hist_page.append(&scrolled(&history));
+    hist_page.append(&scrollers[2]);
     views.add_named(&hist_page, Some("history"));
     main.append(&views);
     content.add_named(&main, Some("main"));
@@ -860,7 +878,8 @@ pub fn build(app: &gtk::Application, only: Option<String>) -> Rc<Panel> {
     settings_page.append(&shead);
     let settings_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     settings_box.add_css_class("nc-settings");
-    settings_page.append(&scrolled(&settings_box));
+    scrollers.push(scrolled(&settings_box));
+    settings_page.append(&scrollers[3]);
     content.add_named(&settings_page, Some("settings"));
 
     let panel = Rc::new(Panel {
@@ -887,6 +906,7 @@ pub fn build(app: &gtk::Application, only: Option<String>) -> Rc<Panel> {
         me: RefCell::default(),
         panel1: RefCell::default(),
         popups: RefCell::default(),
+        scrollers,
     });
     *panel.me.borrow_mut() = Rc::downgrade(&panel);
     let weak = Rc::downgrade(&panel);
