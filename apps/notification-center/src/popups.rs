@@ -48,7 +48,10 @@ struct Payload {
 impl Popups {
     /// Take one down without telling anyone (its notification is already closed).
     fn remove(&self, id: i64) {
-        if let Some(mut t) = self.toasts.borrow_mut().remove(&id) {
+        // Not borrowed while the card goes: taking it away under the pointer calls
+        // its leave handler, which reads the toasts.
+        let toast = self.toasts.borrow_mut().remove(&id);
+        if let Some(mut t) = toast {
             if let Some(timer) = t.timer.take() {
                 timer.remove();
             }
