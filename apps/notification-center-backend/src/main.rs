@@ -389,6 +389,28 @@ fn handle(app: &Rc<App>, req: nyx_ui_link::Request) {
     }
 }
 
+/// Pop-ups that arrived before this started (nyx-notifyd's `Popups`), with nyx-notifyd's
+/// times: urgent ones stay, low ones 5 s, the rest 8 s.
+fn late_popups(app: &Rc<App>) {
+    let weak = Rc::downgrade(app);
+    glib::spawn_future_local(async move {
+        let (Ok(Value::Array(notes)), settings) = (client::json("Popups", None).await, client::json("Settings", None).await) else {
+            return;
+        };
+        let hide_text = settings.ok().and_then(|s| s.get("hide_popup_text").and_then(Value::as_bool)).unwrap_or(false);
+        let Some(app) = weak.upgrade() else { return };
+        for note in notes {
+            let urgency = note.get("urgency").and_then(Value::as_i64).unwrap_or(1);
+            let timeout_ms = match urgency {
+                2.. => 0,
+                0 => 5000,
+                _ => 8000,
+            };
+            popups::show(&app, &json!({"note": note, "timeout_ms": timeout_ms, "hide_text": hide_text}).to_string());
+        }
+    });
+}
+
 /// `NYX_NC_TEST_POPUP=1` in a test copy: a pop-up to look at, without a notification.
 fn test_popup(app: &Rc<App>) {
     let note = json!({
@@ -464,6 +486,8 @@ fn main() -> std::process::ExitCode {
     std::mem::forget(subs);
     if test && std::env::var_os("NYX_NC_TEST_POPUP").is_some() {
         test_popup(&app);
+    } else if !test {
+        late_popups(&app);
     }
 
     if !test {
