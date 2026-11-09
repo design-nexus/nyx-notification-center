@@ -16,9 +16,12 @@ bin="$HOME/.local/bin"
 config="${XDG_CONFIG_HOME:-$HOME/.config}"
 share="${XDG_DATA_HOME:-$HOME/.local/share}"
 state="${XDG_STATE_HOME:-$HOME/.local/state}"
-systemctl --user disable --now nyx-notification-center.service nyx-notifyd.service 2>/dev/null || true
-rm -f "$bin/nyx-notification-center" "$bin/nyx-notifyd" \
-  "$config/systemd/user/nyx-notification-center.service" "$config/systemd/user/nyx-notifyd.service" \
+systemctl --user disable --now nyx-notification-center.service nyx-notification-center-backend.service nyx-notifyd.service 2>/dev/null || true
+# The Quickshell panel (the shared runtime stays for the other components using it).
+rm -rf "$share/nyx-notification-center" "$share/nyx-shell/components/nyx-notification-center"
+rm -f "$bin/nyx-notification-center" "$bin/nyx-notification-center-backend" "$bin/nyx-notifyd" \
+  "$config/systemd/user/nyx-notification-center.service" "$config/systemd/user/nyx-notification-center-backend.service" \
+  "$config/systemd/user/nyx-notifyd.service" \
   "$share/dbus-1/services/io.github.design_nexus.nyx.Notifications.service" "$state/nyx/notifications.json" \
   "$share/dbus-1/services/org.freedesktop.Notifications.service"
 for p in design-nexus.notification-center design-nexus.notifications; do

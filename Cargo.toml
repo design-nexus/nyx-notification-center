@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["apps/notification-center", "apps/notifyd", "crates/nyx-notify-store"]
+members = ["apps/notification-center", "apps/notification-center-backend", "apps/notifyd", "crates/nyx-notify-store"]
 
 [workspace.package]
 edition = "2024"

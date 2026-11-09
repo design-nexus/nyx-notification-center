@@ -6,7 +6,14 @@
 # Two user services: nyx-notifyd keeps every notification in Nyx's history, and the
 # panel opens with `nyx-notification-center --toggle` (bind a key to it, or use the bar
 # button).
+#
+# The panel has a Quickshell interface (the default) and a GTK one; switch with
+# `nyx-notification-center --ui qml|gtk`. The Quickshell one runs in the shared runtime,
+# nyx-shell-qs, with nyx-notification-center-backend.
+#   NYX_UI=gtk|qml ./install.sh     choose the interface on a first install
 set -euo pipefail
+
+DEFAULT_UI=qml
 
 REPO="design-nexus/nyx-notification-center"
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -43,7 +50,7 @@ if ! command -v cargo >/dev/null; then
   sudo pacman -S --needed --noconfirm rust
 fi
 say "Building Nyx Notification Center (a few minutes the first time)"
-(cd "$src" && cargo build --release --locked -p nyx-notification-center -p nyx-notifyd)
+(cd "$src" && cargo build --release --locked -p nyx-notification-center -p nyx-notification-center-backend -p nyx-notifyd)
 
 bin="$HOME/.local/bin"
 config="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -54,11 +61,19 @@ target="${CARGO_TARGET_DIR:-$src/target}/release"
 data="$src/apps/notification-center/data"
 # Replace the files rather than writing into them, so running copies keep their old
 # binary until they restart.
-for b in nyx-notification-center nyx-notifyd; do
+for b in nyx-notification-center nyx-notification-center-backend nyx-notifyd; do
   install -m 755 "$target/$b" "$bin/$b.new" && mv -f "$bin/$b.new" "$bin/$b"
 done
 install -m 644 "$data/nyx-notification-center.service" "$data/nyx-notifyd.service" "$units/"
+install -m 644 "$src/apps/notification-center-backend/data/nyx-notification-center-backend.service" "$units/"
 install -m 644 "$data/io.github.design_nexus.nyx.Notifications.service" "$dbus/"
+# The Quickshell interface, and the shared runtime it runs in (kept if a newer one is in place).
+share="${XDG_DATA_HOME:-$HOME/.local/share}"
+mkdir -p "$share/nyx-notification-center"
+rm -rf "$share/nyx-notification-center/qml.new"
+cp -r "$src/qml/NotificationCenter" "$share/nyx-notification-center/qml.new"
+rm -rf "$share/nyx-notification-center/qml" && mv "$share/nyx-notification-center/qml.new" "$share/nyx-notification-center/qml"
+bash "$src/qml/runtime/install-runtime.sh" "$src/qml/runtime"
 systemctl --user daemon-reload 2>/dev/null || true
 
 # For omarchy-shell: the bar button (put in place, not added to the bar: turn it on from
@@ -78,7 +93,16 @@ fi
 # The history service has no window, so it simply restarts on the new build.
 systemctl --user enable nyx-notifyd.service 2>/dev/null || true
 systemctl --user restart nyx-notifyd.service 2>/dev/null || true
-if systemctl --user is-active --quiet nyx-notification-center.service 2>/dev/null; then
+# The interface: chosen once (NYX_UI, else the default), then whatever --ui last chose.
+chosen="$share/nyx-notification-center/ui"
+if [[ ! -f $chosen ]]; then
+  "$bin/nyx-notification-center" --ui "${NYX_UI:-$DEFAULT_UI}" >/dev/null && echo "${NYX_UI:-$DEFAULT_UI}" > "$chosen"
+fi
+if [[ $("$bin/nyx-notification-center" --ui) == qml ]]; then
+  systemctl --user restart nyx-notification-center-backend.service 2>/dev/null || true
+  systemctl --user restart nyx-shell-qs.service 2>/dev/null || true
+  say "Installed (Quickshell interface). Open it with: nyx-notification-center --toggle"
+elif systemctl --user is-active --quiet nyx-notification-center.service 2>/dev/null; then
   say "Installed. The running panel uses the new build after: systemctl --user restart nyx-notification-center"
 else
   systemctl --user enable --now nyx-notification-center.service 2>/dev/null || true

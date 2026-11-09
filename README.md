@@ -60,7 +60,7 @@ and `omarchy-toggle-notification-silencing` stay in step either way.
 ## Build
 
 ```sh
-cargo build --release --locked -p nyx-notification-center -p nyx-notifyd
+cargo build --release --locked -p nyx-notification-center -p nyx-notification-center-backend -p nyx-notifyd
 cargo test --locked --workspace
 ```
 
@@ -71,6 +71,18 @@ cargo test --locked --workspace
 the notification service on a private bus, against the spec's calls, `notify-send` and
 Omarchy's `omarchy-notification-send`.
 `nyx-notification-center --only HEADLESS-1 --show` opens the panel on one output only.
+
+The panel is drawn in Quickshell by default (the shared Nyx runtime, `nyx-shell-qs`, with
+`nyx-notification-center-backend` between it and `nyx-notifyd`); the GTK panel is still
+there: `nyx-notification-center --ui gtk` switches to it, `--ui qml` back, `--ui` alone
+says which is on. The Quickshell panel's QML is in `qml/NotificationCenter` (`qml/runtime`
+is a copy of the shared runtime, from nyx-shell's `tools/vendor-runtime.sh`). To try it
+on a test output, run `NYX_NOTIFICATION_CENTER_UI_SOCKET=/tmp/nc.sock
+nyx-notification-center-backend` (a test copy: no bus name, no read marks;
+`NYX_NC_TEST_POPUP=1` adds a sample pop-up), and load `qml/NotificationCenter` in `qs`
+with the same socket, `NYX_SHELL_SCREEN=HEADLESS-1` and `NYX_SHELL_NO_KEYBOARD=1`;
+`NYX_NC_TEST_VIEW=inbox|pinned|history|settings` and `NYX_NC_TEST_SEARCH=words` open a
+view.
 
 ## Remove
 

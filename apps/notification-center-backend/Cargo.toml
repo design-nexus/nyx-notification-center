@@ -1,0 +1,24 @@
+[package]
+name = "nyx-notification-center-backend"
+version = "0.1.0"
+description = "Nyx Notification Center without GTK: the panel's state, pop-ups and Panel1, for its Quickshell interface"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "nyx-notification-center-backend"
+path = "src/main.rs"
+
+[dependencies]
+async-channel = "2"
+gio = "0.22"
+gio-unix = "0.22"
+glib = "0.22"
+nyx-desktop = { git = "https://github.com/design-nexus/nyx-core.git", rev = "4378e243aeb09733843996663cd9a5a7f0cbb821" }
+nyx-notify-store = { path = "../../crates/nyx-notify-store" }
+nyx-theme-core = { git = "https://github.com/design-nexus/nyx-design.git", rev = "40db521bab468d54f18f65c6aabd7fc8533d6a4d" }
+nyx-ui-link = { git = "https://github.com/design-nexus/nyx-core.git", rev = "afae3bb8dceba28026a83f24a14e51b47c726dfe" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
