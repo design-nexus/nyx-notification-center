@@ -968,6 +968,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyx-config"
+version = "0.1.0"
+source = "git+https://github.com/nyxos-project/nyx-system.git?rev=2c051e628af5582516ece1a8790882328194c26b#2c051e628af5582516ece1a8790882328194c26b"
+dependencies = [
+ "anyhow",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "nyx-core"
 version = "0.1.0"
 source = "git+https://github.com/design-nexus/nyx-core.git?rev=4378e243aeb09733843996663cd9a5a7f0cbb821#4378e243aeb09733843996663cd9a5a7f0cbb821"
@@ -1012,10 +1022,12 @@ dependencies = [
 name = "nyx-notify-store"
 version = "0.1.0"
 dependencies = [
+ "nyx-config",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

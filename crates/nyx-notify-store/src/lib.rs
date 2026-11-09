@@ -166,6 +166,44 @@ pub struct App {
 
 pub struct Store {
     db: Connection,
+    /// NyxOS's defaults for the settings (the `notifications` domain), under the user's.
+    layers: nyx_config::Layers,
+}
+
+/// The settings' NyxOS domain: only its defaults layers are read; the user's settings are
+/// the row in the database, not a file.
+const SETTINGS_DOMAIN: nyx_config::Domain = nyx_config::Domain { name: "notifications", version: 0, migrations: &[] };
+
+/// Objects merge key by key; anything else replaces what's below.
+fn json_merge(into: &mut serde_json::Value, over: serde_json::Value) {
+    match (into, over) {
+        (serde_json::Value::Object(a), serde_json::Value::Object(b)) => {
+            for (k, v) in b {
+                json_merge(a.entry(k).or_insert(serde_json::Value::Null), v);
+            }
+        }
+        (slot, v) => *slot = v,
+    }
+}
+
+/// Drop from `user` what equals `base`, and objects left empty.
+fn json_sparsify(user: &mut serde_json::Value, base: &serde_json::Value) {
+    let (Some(u), Some(b)) = (user.as_object_mut(), base.as_object()) else { return };
+    u.retain(|k, v| match b.get(k) {
+        Some(bv) if v.is_object() && bv.is_object() => {
+            json_sparsify(v, bv);
+            v.as_object().is_some_and(|o| !o.is_empty())
+        }
+        Some(bv) => !json_same(v, bv),
+        None => true,
+    });
+}
+
+fn json_same(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    match (a.as_f64(), b.as_f64()) {
+        (Some(x), Some(y)) => (x - y).abs() < 1e-9,
+        _ => a == b,
+    }
 }
 
 const SCHEMA: &str = "
@@ -323,7 +361,15 @@ impl Store {
             "CREATE INDEX IF NOT EXISTS notifications_live ON notifications(live_id) WHERE closed_reason IS NULL;
              CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
         )?;
-        Ok(Store { db })
+        let mut store = Store { db, layers: nyx_config::Layers::standard() };
+        store.trim_old_settings()?;
+        Ok(store)
+    }
+
+    /// The settings over other layers than the system's (tests).
+    pub fn with_layers(mut self, layers: nyx_config::Layers) -> Store {
+        self.layers = layers;
+        self
     }
 
     /// Where it lives: `~/.local/share/nyx/notifications.db`.
@@ -334,20 +380,66 @@ impl Store {
         data.join("nyx/notifications.db")
     }
 
-    pub fn settings(&self) -> Settings {
-        self.db
-            .query_row("SELECT json FROM settings WHERE id = 1", [], |r| r.get::<_, String>(0))
-            .ok()
-            .and_then(|j| serde_json::from_str::<Settings>(&j).ok())
-            .unwrap_or_default()
-            .tidy()
+    /// What a setting is when the user hasn't changed it: the service's own value, then
+    /// NyxOS's default (`/etc/nyxos/defaults/notifications.toml`) and an administrator's.
+    fn base(&self) -> serde_json::Value {
+        let builtin = nyx_config::table_of(&Settings::default());
+        let store = nyx_config::Store::with_layers(self.layers.clone(), SETTINGS_DOMAIN, builtin);
+        serde_json::to_value(store.base().table).unwrap_or_default()
     }
 
-    /// Save settings. Apps newly left out lose their (unpinned) history, and a shorter
-    /// retention applies straight away.
+    /// The user's own settings (only what they changed), over the defaults.
+    pub fn settings(&self) -> Settings {
+        let mut merged = self.base();
+        if let Some(user) = self.user_settings() {
+            json_merge(&mut merged, user);
+        }
+        if let Some(o) = merged.as_object_mut() {
+            o.remove(nyx_config::SCHEMA_KEY);
+        }
+        serde_json::from_value::<Settings>(merged).unwrap_or_default().tidy()
+    }
+
+    fn user_settings(&self) -> Option<serde_json::Value> {
+        let j = self.db.query_row("SELECT json FROM settings WHERE id = 1", [], |r| r.get::<_, String>(0)).ok()?;
+        serde_json::from_str(&j).ok()
+    }
+
+    /// A row from before the defaults layer held every setting: keep only the values that
+    /// differ from the service's own (what the defaults were then), once.
+    fn trim_old_settings(&mut self) -> Result<()> {
+        let Some(mut user) = self.user_settings() else { return Ok(()) };
+        if user.get(nyx_config::SCHEMA_KEY).is_some() {
+            return Ok(());
+        }
+        let builtin = serde_json::to_value(Settings::default()).unwrap_or_default();
+        json_sparsify(&mut user, &builtin);
+        if let Some(o) = user.as_object_mut() {
+            o.insert(nyx_config::SCHEMA_KEY.into(), serde_json::json!(1));
+        }
+        self.db.execute("UPDATE settings SET json = ?1 WHERE id = 1", [user.to_string()])?;
+        Ok(())
+    }
+
+    /// Hand every setting back to the defaults.
+    pub fn reset_settings(&mut self) -> Result<Settings> {
+        self.db.execute("DELETE FROM settings WHERE id = 1", [])?;
+        let s = self.settings();
+        self.prune(now())?;
+        Ok(s)
+    }
+
+    /// Save settings: the user's row keeps only what differs from the defaults, so a
+    /// setting left alone follows NyxOS's default when it changes. Apps newly left out
+    /// lose their (unpinned) history, and a shorter retention applies straight away.
     pub fn set_settings(&mut self, settings: Settings) -> Result<Settings> {
         let settings = settings.tidy();
-        let json = serde_json::to_string(&settings).expect("settings serialize");
+        let mut user = serde_json::to_value(&settings).expect("settings serialize");
+        json_sparsify(&mut user, &self.base());
+        if let Some(o) = user.as_object_mut() {
+            o.insert(nyx_config::SCHEMA_KEY.into(), serde_json::json!(1));
+        }
+        let json = user.to_string();
         let tx = self.db.transaction()?;
         tx.execute("INSERT INTO settings (id, json) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET json = ?1", [json])?;
         for app in &settings.excluded {
@@ -1100,5 +1192,44 @@ mod tests {
         let n = &s.inbox().unwrap()[0];
         assert_eq!(n.exec_argv.as_deref(), Some(&["omarchy-update".to_string()][..]));
         assert_eq!(n.actions, vec![Action { label: "Later".into(), argv: vec!["true".into()] }]);
+    }
+
+    #[test]
+    fn settings_hold_only_what_the_user_changed_over_nyxos_defaults() {
+        let d = tempfile::tempdir().unwrap();
+        let layers = nyx_config::Layers { defaults: d.path().join("d"), system: d.path().join("s"), user: d.path().join("u") };
+        std::fs::create_dir_all(&layers.defaults).unwrap();
+        std::fs::write(layers.defaults.join("notifications.toml"), "schema = 1\nretention_days = 7\nkeep_codes = true\n").unwrap();
+        let mut s = Store::memory().unwrap().with_layers(layers.clone());
+        assert_eq!(s.settings().retention_days, 7);
+        assert!(s.settings().keep_codes);
+        let mut mine = s.settings();
+        mine.hide_popup_text = true;
+        s.set_settings(mine).unwrap();
+        let row = s.user_settings().unwrap();
+        assert_eq!(row.get("retention_days"), None, "NyxOS's value isn't copied: {row}");
+        assert_eq!(row["hide_popup_text"], serde_json::json!(true));
+        // NyxOS changes its default: followed, the user's own change kept.
+        std::fs::write(layers.defaults.join("notifications.toml"), "retention_days = 90\n").unwrap();
+        assert_eq!(s.settings().retention_days, 90);
+        assert!(s.settings().hide_popup_text);
+        assert_eq!(s.reset_settings().unwrap().hide_popup_text, false);
+    }
+
+    #[test]
+    fn a_full_row_from_before_keeps_only_its_changes() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("n.db");
+        {
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch(SCHEMA).unwrap();
+            let full = serde_json::to_string(&Settings { retention_days: 90, ..Default::default() }).unwrap();
+            db.execute("INSERT INTO settings (id, json) VALUES (1, ?1)", [full]).unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let row = s.user_settings().unwrap();
+        assert_eq!(row["retention_days"], serde_json::json!(90));
+        assert_eq!(row.get("keep_codes"), None);
+        assert_eq!(row["schema"], serde_json::json!(1));
     }
 }
