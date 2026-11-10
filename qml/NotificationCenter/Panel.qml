@@ -189,7 +189,7 @@ FocusScope {
                     onClicked: p.client.request("ToggleDnd", {}, null)
                 }
                 IconButton {
-                    icon: "emblem-system-symbolic"
+                    icon: "nyx-settings-symbolic"
                     tooltip: "Notification settings"
                     onClicked: p.setSettingsOpen(true)
                 }
