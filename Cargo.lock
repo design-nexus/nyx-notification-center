@@ -978,6 +978,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyx-connect"
+version = "0.1.0"
+source = "git+https://github.com/design-nexus/nyx-core.git?rev=43d7c2e7684be8274c764619c5ac3886ed6b9438#43d7c2e7684be8274c764619c5ac3886ed6b9438"
+dependencies = [
+ "nyx-devices",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "nyx-core"
 version = "0.1.0"
 source = "git+https://github.com/design-nexus/nyx-core.git?rev=4378e243aeb09733843996663cd9a5a7f0cbb821#4378e243aeb09733843996663cd9a5a7f0cbb821"
@@ -1002,6 +1013,15 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "nyx-devices"
+version = "0.1.0"
+source = "git+https://github.com/design-nexus/nyx-core.git?rev=43d7c2e7684be8274c764619c5ac3886ed6b9438#43d7c2e7684be8274c764619c5ac3886ed6b9438"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1053,6 +1073,7 @@ version = "0.1.0"
 dependencies = [
  "inotify",
  "libc",
+ "nyx-connect",
  "nyx-notify-store",
  "png",
  "serde",

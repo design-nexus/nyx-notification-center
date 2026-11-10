@@ -67,6 +67,10 @@ pub struct Note {
     /// Passing (the `transient` hint): closes when its pop-up does.
     #[serde(default)]
     pub transient: bool,
+    /// The device it came from, when a phone's notification was relayed (Flux's device
+    /// ID); empty for this computer's.
+    #[serde(default)]
+    pub device: String,
 }
 
 impl Note {
@@ -234,7 +238,7 @@ CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), json
 ";
 
 const COLUMNS: &str = "id, key, app, app_icon, glyph, summary, body, urgency, exec_argv, exec_actions, ts, closed_ts, \
-                       closed_reason, live, read, dismissed, pinned, app_actions, desktop_entry, image, live_id, transient";
+                       closed_reason, live, read, dismissed, pinned, app_actions, desktop_entry, image, live_id, transient, device";
 
 /// Columns added after the first release, with their definitions.
 const ADDED: &[(&str, &str)] = &[
@@ -244,6 +248,8 @@ const ADDED: &[(&str, &str)] = &[
     ("live_id", "INTEGER"),
     ("sender", "TEXT NOT NULL DEFAULT ''"),
     ("transient", "INTEGER NOT NULL DEFAULT 0"),
+    ("device", "TEXT NOT NULL DEFAULT ''"),
+    ("source_key", "TEXT NOT NULL DEFAULT ''"),
 ];
 
 fn note(r: &rusqlite::Row) -> Result<Note> {
@@ -273,6 +279,7 @@ fn note(r: &rusqlite::Row) -> Result<Note> {
         codes: Vec::new(),
         live_id: r.get::<_, Option<i64>>(20)?.map(|v| v as u32),
         transient: r.get(21)?,
+        device: r.get(22)?,
     })
     .map(|mut n| {
         n.codes = detect::codes(&n.summary, &n.body);
@@ -311,6 +318,11 @@ pub struct Incoming {
     pub sender: String,
     /// Not worth keeping (the `transient` hint): no Inbox.
     pub transient: bool,
+    /// The device it came from (Flux's device ID), for a relayed phone notification.
+    pub device: String,
+    /// What the source calls it (`flux:<device>:<its id>`), so the same notification
+    /// sent again updates its row instead of adding one.
+    pub source_key: String,
 }
 
 /// What a search looks for.
@@ -717,6 +729,22 @@ impl Store {
             .optional()
     }
 
+    /// The id an open notification from the same source has (see `Incoming::source_key`).
+    pub fn open_source(&self, source_key: &str) -> Result<Option<u32>> {
+        if source_key.is_empty() {
+            return Ok(None);
+        }
+        self.db
+            .query_row(
+                "SELECT live_id FROM notifications WHERE source_key = ?1 AND closed_reason IS NULL AND live_id IS NOT NULL \
+                 ORDER BY id DESC LIMIT 1",
+                [source_key],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .map(|v| v.map(|v| v as u32))
+    }
+
     /// Every notification still open (stage B), oldest first.
     pub fn open_notes(&self) -> Result<Vec<Note>> {
         self.select("closed_reason IS NULL AND live_id IS NOT NULL", "ts", &[])
@@ -732,7 +760,7 @@ impl Store {
                 self.db.execute(
                     "UPDATE notifications SET app = ?2, app_icon = ?3, glyph = ?4, summary = ?5, body = ?6, urgency = ?7, \
                      exec_argv = ?8, exec_actions = ?9, app_actions = ?10, desktop_entry = ?11, image = ?12, sender = ?13, \
-                     transient = ?14, ts = ?15, live = 1, read = ?16, dismissed = ?16 WHERE id = ?1",
+                     transient = ?14, ts = ?15, live = 1, read = ?16, dismissed = ?16, device = ?17, source_key = ?18 WHERE id = ?1",
                     params![
                         id,
                         n.app,
@@ -749,7 +777,9 @@ impl Store {
                         n.sender,
                         n.transient,
                         now,
-                        quiet
+                        quiet,
+                        n.device,
+                        n.source_key
                     ],
                 )?;
                 id
@@ -759,8 +789,8 @@ impl Store {
                 let key = format!("n{live_id}-{}-{next}", (now * 1000.0) as i64);
                 self.db.execute(
                     "INSERT INTO notifications (key, app, app_icon, glyph, summary, body, urgency, exec_argv, exec_actions, \
-                     app_actions, desktop_entry, image, sender, transient, ts, live, read, dismissed, live_id) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1, ?16, ?16, ?17)",
+                     app_actions, desktop_entry, image, sender, transient, ts, live, read, dismissed, live_id, device, source_key) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1, ?16, ?16, ?17, ?18, ?19)",
                     params![
                         key,
                         n.app,
@@ -778,7 +808,9 @@ impl Store {
                         n.transient,
                         now,
                         quiet,
-                        live_id
+                        live_id,
+                        n.device,
+                        n.source_key
                     ],
                 )?;
                 self.db.last_insert_rowid()
@@ -1109,6 +1141,28 @@ mod tests {
         // The id is free again: a new notification gets a new row.
         let m = s.notify(a, &incoming("Chat", "New"), t).unwrap();
         assert_ne!(m.id, n.id);
+    }
+
+    #[test]
+    fn a_phone_notification_keeps_its_device_and_is_found_again() {
+        let mut s = Store::memory().unwrap();
+        let t = now();
+        let a = s.next_live_id().unwrap();
+        let phone = Incoming {
+            device: "a1b2c3d4e5f60718293a4b5c6d7e8f90".into(),
+            source_key: "flux:a1b2c3d4e5f60718293a4b5c6d7e8f90:MTIz".into(),
+            ..incoming("WhatsApp · Pandora", "Kari")
+        };
+        let n = s.notify(a, &phone, t).unwrap();
+        assert_eq!(n.device, "a1b2c3d4e5f60718293a4b5c6d7e8f90");
+        assert_eq!(s.open_source(&phone.source_key).unwrap(), Some(a));
+        assert_eq!(s.open_source("").unwrap(), None, "no key, no match");
+        assert_eq!(s.open_source("flux:other:1").unwrap(), None);
+        // Sent again after fluxd restarted: the same row.
+        let again = s.notify(s.open_source(&phone.source_key).unwrap().unwrap(), &phone, t + 1.0).unwrap();
+        assert_eq!(again.id, n.id);
+        s.close_live(a, "dismissed", t + 2.0).unwrap();
+        assert_eq!(s.open_source(&phone.source_key).unwrap(), None, "a closed one isn't reused");
     }
 
     #[test]

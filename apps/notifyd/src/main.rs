@@ -15,6 +15,7 @@
 //! `--use-omarchy-popups`, which also hands Omarchy's part over).
 
 mod fdo;
+mod flux;
 mod image;
 mod launch;
 mod quiet;

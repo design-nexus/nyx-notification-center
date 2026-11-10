@@ -165,6 +165,8 @@ pub fn incoming(
         app_actions,
         sender: sender.to_string(),
         transient: hint("transient").is_some_and(boolean),
+        device: String::new(),
+        source_key: String::new(),
     }
 }
 
@@ -190,9 +192,21 @@ impl Notifications {
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
         #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
     ) -> fdo::Result<u32> {
         let sender = header.sender().map(|s| s.to_string()).unwrap_or_default();
-        let inc = incoming(app_name, app_icon, summary, body, &actions, &hints, &sender);
+        let mut inc = incoming(app_name, app_icon, summary, body, &actions, &hints, &sender);
+        let mut replaces_id = replaces_id;
+        // A phone's notification, relayed by Flux.
+        if crate::flux::is_fluxd(conn, &sender).await {
+            let (device, key) = crate::flux::source(app_name, &actions, crate::flux::device_named);
+            if replaces_id == 0
+                && let Ok(Some(live)) = self.state.with(|s| s.open_source(&key))
+            {
+                replaces_id = live;
+            }
+            (inc.device, inc.source_key) = (device, key);
+        }
         state::arrive(&self.state, replaces_id, inc, expire_timeout).await
     }
 
