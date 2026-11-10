@@ -42,9 +42,12 @@ Rectangle {
         id: hover
         cursorShape: c.note.clickable ? Qt.PointingHandCursor : Qt.ArrowCursor
     }
-    TapHandler {
+    // A MouseArea, not a TapHandler: the first click on the panel also gives it the
+    // keyboard, and the window turning active cancels a TapHandler's tap.
+    MouseArea {
+        anchors.fill: parent
         acceptedButtons: Qt.LeftButton
-        onTapped: c.client.request("Activate", { id: c.note.id }, ok => {
+        onClicked: c.client.request("Activate", { id: c.note.id }, ok => {
             if (ok === true)
                 c.done();
         })
