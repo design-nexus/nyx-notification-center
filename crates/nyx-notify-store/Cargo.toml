@@ -8,7 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-nyx-config = { git = "https://github.com/nyxos-project/nyx-system.git", rev = "2c051e628af5582516ece1a8790882328194c26b" }
+nyx-config = { git = "https://github.com/nyxos-project/nyx-system.git", rev = "f68ecc891cd0d5a36b6ed29e93ed5ffc52e77acc" }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 regex = "1"
