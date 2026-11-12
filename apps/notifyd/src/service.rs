@@ -4,8 +4,9 @@
 use crate::state::{self, State, err};
 use nyx_notify_store::{Query, Settings, now};
 use std::sync::Arc;
+use zbus::message::Header;
 use zbus::object_server::SignalEmitter;
-use zbus::{fdo, interface};
+use zbus::{Connection, fdo, interface};
 
 pub struct Service {
     pub state: Arc<State>,
@@ -13,6 +14,22 @@ pub struct Service {
 
 fn json<T: serde::Serialize>(v: &T) -> fdo::Result<String> {
     serde_json::to_string(v).map_err(err)
+}
+
+/// On NyxOS the stored notifications (message text, sign-in codes) go only to Nyx
+/// programs (nyx-peer: the system's trusted folders or this service's own). Elsewhere
+/// Omarchy's shell reads them through busctl, so anyone of this user may.
+async fn reader(conn: &Connection, header: &Header<'_>) -> fdo::Result<()> {
+    if !std::path::Path::new("/etc/NIXOS").exists() {
+        return Ok(());
+    }
+    let refused = || fdo::Error::AccessDenied("only Nyx programs may read notifications".into());
+    let sender = header.sender().ok_or_else(refused)?.to_string();
+    let dbus = fdo::DBusProxy::new(conn).await?;
+    let pid = dbus.get_connection_unix_process_id(zbus::names::BusName::try_from(sender.as_str()).map_err(err)?).await?;
+    let exe = std::fs::read_link(format!("/proc/{pid}/exe")).map_err(|_| refused())?;
+    let own = std::env::current_exe().ok().and_then(|p| p.parent().map(std::path::Path::to_path_buf)).unwrap_or_default();
+    nyx_peer::program(&exe, &own).map(|_| ()).ok_or_else(refused)
 }
 
 impl Service {
@@ -31,23 +48,32 @@ impl Service {
     }
 
     /// Not dismissed, newest first (JSON list).
-    fn inbox(&self) -> fdo::Result<String> {
+    async fn inbox(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] conn: &Connection) -> fdo::Result<String> {
+        reader(conn, &header).await?;
         json(&self.state.with(|s| s.inbox())?)
     }
 
     /// Pinned, most recently pinned first.
-    fn pinned(&self) -> fdo::Result<String> {
+    async fn pinned(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] conn: &Connection) -> fdo::Result<String> {
+        reader(conn, &header).await?;
         json(&self.state.with(|s| s.pinned())?)
     }
 
     /// History matching `query` (JSON `{text, app, days, limit}`; `""` for everything).
-    fn history(&self, query: &str) -> fdo::Result<String> {
+    async fn history(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        #[zbus(connection)] conn: &Connection,
+        query: &str,
+    ) -> fdo::Result<String> {
+        reader(conn, &header).await?;
         let q: Query = if query.trim().is_empty() { Query::default() } else { serde_json::from_str(query).map_err(err)? };
         json(&self.state.with(|s| s.history(&q, now()))?)
     }
 
     /// Apps with stored notifications, and the ones left out of history.
-    fn apps(&self) -> fdo::Result<String> {
+    async fn apps(&self, #[zbus(header)] header: Header<'_>, #[zbus(connection)] conn: &Connection) -> fdo::Result<String> {
+        reader(conn, &header).await?;
         json(&self.state.with(|s| s.apps())?)
     }
 

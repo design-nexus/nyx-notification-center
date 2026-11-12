@@ -1427,6 +1427,7 @@ dependencies = [
  "libc",
  "nyx-connect",
  "nyx-notify-store",
+ "nyx-peer",
  "png",
  "serde",
  "serde_json",
