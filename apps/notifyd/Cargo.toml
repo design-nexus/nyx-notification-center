@@ -13,9 +13,9 @@ libc = "0.2"
 png = "0.18"
 nyx-notify-store = { path = "../../crates/nyx-notify-store" }
 # Which paired device a relayed phone notification came from (Nyx Connect).
-nyx-connect = { git = "https://github.com/design-nexus/nyx-core.git", rev = "166ff17bdb09dd6c5f130fd28ecf81d1f8a59d2d" }
+nyx-connect = { git = "https://github.com/design-nexus/nyx-core.git", rev = "32f0c5e154fc44c763b8ecd80d35a3b298723afa" }
 # Who may read the history: Nyx programs, by their executable.
-nyx-peer = { git = "https://github.com/design-nexus/nyx-core.git", rev = "166ff17bdb09dd6c5f130fd28ecf81d1f8a59d2d" }
+nyx-peer = { git = "https://github.com/design-nexus/nyx-core.git", rev = "32f0c5e154fc44c763b8ecd80d35a3b298723afa" }
 serde = "1"
 serde_json = "1"
 zbus = "5"
