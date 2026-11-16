@@ -41,6 +41,11 @@ watches Omarchy's notification files and keeps a copy of each one in
 `~/.local/share/nyx/notifications.db`, so history goes back further than Omarchy's own
 last day. Buttons an app put on a pop-up then work only while the pop-up is showing.
 
+The database is readable by any program you run, like the rest of your home folder; the
+service answering only Nyx programs doesn't change that. So the text of passing
+notifications (the `transient` hint) and of password managers and authenticators (sign-in
+codes) is removed once they close; their titles stay in history.
+
 To have Nyx receive notifications and show the pop-ups itself:
 
 ```sh

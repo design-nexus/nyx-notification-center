@@ -298,6 +298,16 @@ fn handled(reason: Option<&str>) -> bool {
     matches!(reason, Some("dismissed" | "activated" | "closed"))
 }
 
+/// Password managers and authenticators, whose notifications carry codes and secrets: their
+/// text isn't kept once the notification closes.
+pub fn secret_source(app: &str, desktop_entry: &str) -> bool {
+    const NAMED: &[&str] = &["bitwarden", "keepassxc", "1password", "authenticator", "otpclient", "proton pass"];
+    let (app, entry) = (app.to_lowercase(), desktop_entry.to_lowercase());
+    app == "passwords"
+        || entry == "io.github.design_nexus.nyx.passwords"
+        || NAMED.iter().any(|n| app.contains(n) || entry.contains(n))
+}
+
 /// A notification arriving over D-Bus (stage B).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Incoming {
@@ -358,6 +368,8 @@ impl Store {
 
     fn init(db: Connection) -> Result<Store> {
         db.pragma_update(None, "journal_mode", "WAL")?;
+        // Text taken out (a closed sign-in code's) is overwritten, not left in free pages.
+        db.pragma_update(None, "secure_delete", "ON")?;
         db.busy_timeout(std::time::Duration::from_secs(2))?;
         db.execute_batch(SCHEMA)?;
         let have: Vec<String> = db
@@ -835,14 +847,18 @@ impl Store {
         let tx = self.db.transaction()?;
         let mut closed = Vec::new();
         for id in ids {
-            let row: Option<(Option<i64>, String, bool)> = tx
+            let row: Option<(Option<i64>, String, bool, String)> = tx
                 .query_row(
-                    "SELECT live_id, app, transient FROM notifications WHERE id = ?1 AND closed_reason IS NULL",
+                    "SELECT live_id, app, transient, desktop_entry FROM notifications WHERE id = ?1 AND closed_reason IS NULL",
                     [id],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
                 .optional()?;
-            let Some((live_id, app, transient)) = row else { continue };
+            let Some((live_id, app, transient, entry)) = row else { continue };
+            // Its text was for the moment it showed: the database keeps only the title.
+            if transient || secret_source(&app, &entry) {
+                tx.execute("UPDATE notifications SET body = '' WHERE id = ?1", [id])?;
+            }
             if excluded.contains(&app) {
                 tx.execute("DELETE FROM notifications WHERE id = ?1 AND pinned = 0", [id])?;
             }
@@ -927,6 +943,15 @@ fn insert(tx: &rusqlite::Transaction, row: &omarchy::Row, live: bool) -> Result<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn secret_sources() {
+        assert!(super::secret_source("Passwords", ""));
+        assert!(super::secret_source("", "io.github.design_nexus.nyx.Passwords"));
+        assert!(super::secret_source("Google Authenticator", ""));
+        assert!(super::secret_source("KeePassXC", "org.keepassxc.KeePassXC"));
+        assert!(!super::secret_source("Mail", "io.github.design_nexus.nyx.Mail"));
+    }
+
     use super::*;
     use omarchy::Row;
 
