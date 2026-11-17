@@ -1,10 +1,12 @@
 # Notification Center
 
-Notifications for [Omarchy](https://omarchy.org) and Hyprland that stay around: a panel on
+Notifications for NyxOS and [Omarchy](https://omarchy.org) that stay around: a panel on
 the right edge of the screen with an Inbox, pinned notifications and searchable history.
-It takes its colors from your Omarchy theme.
+It takes its colors from the desktop theme.
 
 ## Install
+
+On NyxOS, the Notification Center comes with the system. On Omarchy:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/design-nexus/nyx-notification-center/main/install.sh | bash
